@@ -147,12 +147,3 @@ Return transfers (at most N - 1 edges)
 - **Current Limitations**: In local/preview mode without an SMTP server, password reset displays the generated recovery token safely in-app for testing; UPI QR confirmation relies on recipient confirmation rather than a paid banking webhook.
 - **Future Enhancements**: Automated bank/UPI webhook reconciliation, OCR receipt line-item extraction, recurring monthly rent/subscription expenses, and multi-currency FX conversion.
 
----
-
-## 9. 3D Graphics, Radial Debt-Graph Visualization & Interactive Animation Engine
-
-SettleUp integrates a hardware-accelerated WebGL 3D visualization layer built with **Three.js** inside React 19, paired with **Motion** and **GSAP** UI choreography:
-1. **Authentication & Hero 3D Sculpture (`HeroVaultScene.tsx` & `AuthBackdropLayout.tsx`)**: Encapsulates a gold-framed slate ledger card, glowing holographic security chip, stacked coin tower, faceted crystal `OctahedronGeometry` + wireframe `IcosahedronGeometry` shell, dual `TorusGeometry` orbital rings, and curved `TubeGeometry` (`CatmullRomCurve3`) transfer arcs inside a two-column editorial portal with drag-to-orbit rotation and Euler damping.
-2. **Dashboard 3D Radial Debt & Expense Network (`DashboardRadialHub.tsx`)**: Renders active groups radially around a central vault core with animated golden/emerald transfer rays, traveling light pulses, `THREE.Raycaster` node selection, and smooth `THREE.MathUtils.damp` camera fly-to animations synchronized with right-hand expenditure percentage meters and an **Instant QR Hub** (`InstantQrHub.tsx`).
-3. **Performance & Accessibility Safeguards**: Uses software-WebGL `fenceSync` pacing (`afterDraw`), `prefers-reduced-motion` static fallback, and full geometry/material/texture GPU resource disposal on unmount.
-

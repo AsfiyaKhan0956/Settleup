@@ -340,9 +340,6 @@ export default function App() {
               user={user}
               onNavigate={navigate}
               onReplayOnboarding={() => setShowTour(true)}
-              onOpenPayQr={(target) => setPayTarget(target)}
-              onToast={showToast}
-              refreshSignal={refreshSignal}
             />
           )}
 

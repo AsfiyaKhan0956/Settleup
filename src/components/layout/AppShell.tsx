@@ -13,7 +13,6 @@ import {
   Wallet,
   X,
 } from 'lucide-react';
-import { AnimatePresence, motion } from 'motion/react';
 import { BrandMark, UserAvatar } from '../common/BrandMark.tsx';
 import type { AppRoute, AuthUser } from '../../types/index.ts';
 
@@ -191,19 +190,7 @@ export const AppShell: React.FC<AppShellProps> = ({
           </div>
         </header>
 
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-6xl w-full mx-auto">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={currentRoute}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={{ duration: 0.22, ease: 'easeOut' }}
-            >
-              {children}
-            </motion.div>
-          </AnimatePresence>
-        </main>
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-6xl w-full mx-auto">{children}</main>
       </div>
     </div>
   );

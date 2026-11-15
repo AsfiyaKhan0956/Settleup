@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { motion } from 'motion/react';
 import { formatINR } from '../../utils/currency.ts';
 
 export interface MonthlyPoint {
@@ -16,7 +15,7 @@ export interface CategoryPoint {
   count: number;
 }
 
-const CHART_PALETTE = ['#065F46', '#D97706', '#0D9488', '#4F46E5', '#E11D48', '#0F172A', '#059669', '#64748B'];
+const CHART_PALETTE = ['#065F46', '#0F172A', '#059669', '#D97706', '#475569', '#0D9488', '#64748B', '#1E293B'];
 
 export const MonthlyTrendChart: React.FC<{ data: MonthlyPoint[] }> = ({ data }) => {
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
@@ -54,17 +53,17 @@ export const MonthlyTrendChart: React.FC<{ data: MonthlyPoint[] }> = ({ data }) 
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+      <div className="flex items-center justify-between text-xs text-slate-600">
         <div className="flex items-center gap-4">
           <span className="inline-flex items-center gap-1.5">
             <span className="w-3 h-0.5 bg-[#065F46] inline-block" /> Group Total
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="w-3 h-0.5 bg-[#D97706] inline-block border-b border-dashed" /> My Share
+            <span className="w-3 h-0.5 bg-[#0F172A] inline-block border-b border-dashed" /> My Share
           </span>
         </div>
         {hoveredIdx !== null && points[hoveredIdx] && (
-          <span className="font-mono-num text-slate-900 font-semibold bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded">
+          <span className="font-mono-num text-slate-800 font-medium">
             {points[hoveredIdx].month}: Group {formatINR(points[hoveredIdx].group_total_paise)} · Mine{' '}
             {formatINR(points[hoveredIdx].my_share_paise)}
           </span>
@@ -84,10 +83,10 @@ export const MonthlyTrendChart: React.FC<{ data: MonthlyPoint[] }> = ({ data }) 
           );
         })}
 
-        {areaPath && <path d={areaPath} fill="#065F46" fillOpacity="0.1" />}
-        {points.length > 1 && <path d={groupPath} fill="none" stroke="#065F46" strokeWidth="2.75" strokeLinecap="round" />}
+        {areaPath && <path d={areaPath} fill="#065F46" fillOpacity="0.08" />}
+        {points.length > 1 && <path d={groupPath} fill="none" stroke="#065F46" strokeWidth="2.5" strokeLinecap="round" />}
         {points.length > 1 && (
-          <path d={myPath} fill="none" stroke="#D97706" strokeWidth="2.25" strokeDasharray="5 4" strokeLinecap="round" />
+          <path d={myPath} fill="none" stroke="#0F172A" strokeWidth="2" strokeDasharray="4 4" strokeLinecap="round" />
         )}
 
         {points.map((p, i) => (
@@ -97,8 +96,8 @@ export const MonthlyTrendChart: React.FC<{ data: MonthlyPoint[] }> = ({ data }) 
             onMouseLeave={() => setHoveredIdx(null)}
             className="cursor-pointer"
           >
-            <circle cx={p.x} cy={p.yGroup} r={hoveredIdx === i ? 6.5 : 4.2} fill="#065F46" stroke="#FFFFFF" strokeWidth="2" />
-            <circle cx={p.x} cy={p.yMine} r={hoveredIdx === i ? 5.5 : 3.8} fill="#D97706" stroke="#FFFFFF" strokeWidth="1.5" />
+            <circle cx={p.x} cy={p.yGroup} r={hoveredIdx === i ? 6 : 4} fill="#065F46" stroke="#FFFFFF" strokeWidth="2" />
+            <circle cx={p.x} cy={p.yMine} r={hoveredIdx === i ? 5 : 3.5} fill="#0F172A" stroke="#FFFFFF" strokeWidth="1.5" />
             <text x={p.x} y={height - 4} textAnchor="middle" className="fill-slate-500 text-[11px] font-mono-num">
               {p.month}
             </text>
@@ -126,81 +125,68 @@ export const CategoryDonutChart: React.FC<{ data: CategoryPoint[] }> = ({ data }
   let accumulated = 0;
 
   const activeItem = activeIdx !== null ? data[activeIdx] : null;
-  const activePct = activeItem ? Math.round((activeItem.total_paise / total) * 100) : 100;
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-12 gap-5 items-center">
-      <div className="sm:col-span-5 flex flex-col items-center relative">
-        <div className="relative">
-          <svg width="176" height="176" viewBox="0 0 176 176" role="img" aria-label="Category spending distribution">
-            <g transform="translate(88,88) rotate(-90)">
-              {data.map((d, i) => {
-                const frac = d.total_paise / total;
-                const dash = frac * circumference;
-                const offset = -accumulated * circumference;
-                accumulated += frac;
-                return (
-                  <circle
-                    key={d.category}
-                    r={radius}
-                    cx="0"
-                    cy="0"
-                    fill="transparent"
-                    stroke={CHART_PALETTE[i % CHART_PALETTE.length]}
-                    strokeWidth={activeIdx === i ? 25 : 20}
-                    strokeDasharray={`${Math.max(0, dash - 2)} ${circumference}`}
-                    strokeDashoffset={offset}
-                    onMouseEnter={() => setActiveIdx(i)}
-                    onMouseLeave={() => setActiveIdx(null)}
-                    className="transition-all duration-300 cursor-pointer"
-                  />
-                );
-              })}
-            </g>
-          </svg>
-          <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center px-4">
-            <span className="text-[11px] font-medium text-slate-500">
-              {activeItem ? `${activeItem.category} (${activePct}%)` : 'Total Spend'}
-            </span>
-            <span className="font-mono-num text-sm font-bold text-slate-900">
-              {formatINR(activeItem ? activeItem.total_paise : total)}
-            </span>
-          </div>
+    <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-center">
+      <div className="sm:col-span-5 flex justify-center relative">
+        <svg width="176" height="176" viewBox="0 0 176 176" role="img" aria-label="Category spending distribution">
+          <g transform="translate(88,88) rotate(-90)">
+            {data.map((d, i) => {
+              const frac = d.total_paise / total;
+              const dash = frac * circumference;
+              const offset = -accumulated * circumference;
+              accumulated += frac;
+              return (
+                <circle
+                  key={d.category}
+                  r={radius}
+                  cx="0"
+                  cy="0"
+                  fill="transparent"
+                  stroke={CHART_PALETTE[i % CHART_PALETTE.length]}
+                  strokeWidth={activeIdx === i ? 24 : 20}
+                  strokeDasharray={`${Math.max(0, dash - 1.5)} ${circumference}`}
+                  strokeDashoffset={offset}
+                  onMouseEnter={() => setActiveIdx(i)}
+                  onMouseLeave={() => setActiveIdx(null)}
+                  className="transition-all cursor-pointer"
+                />
+              );
+            })}
+          </g>
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center px-4">
+          <span className="text-[11px] text-slate-500">
+            {activeItem ? activeItem.category : 'Total'}
+          </span>
+          <span className="font-mono-num text-sm font-bold text-slate-900">
+            {formatINR(activeItem ? activeItem.total_paise : total)}
+          </span>
         </div>
       </div>
 
-      <div className="sm:col-span-7 space-y-2.5 max-h-56 overflow-y-auto pr-1">
+      <div className="sm:col-span-7 space-y-2 max-h-52 overflow-y-auto pr-1">
         {data.map((d, i) => {
           const pct = Math.round((d.total_paise / total) * 100);
-          const color = CHART_PALETTE[i % CHART_PALETTE.length];
           return (
             <div
               key={d.category}
               onMouseEnter={() => setActiveIdx(i)}
               onMouseLeave={() => setActiveIdx(null)}
-              className={`p-2 rounded-lg transition-colors cursor-default ${
-                activeIdx === i ? 'bg-slate-100' : 'bg-slate-50/70'
+              className={`flex items-center justify-between text-xs py-1.5 px-2 rounded-md transition-colors cursor-default ${
+                activeIdx === i ? 'bg-slate-100' : ''
               }`}
             >
-              <div className="flex items-center justify-between text-xs mb-1">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: color }} />
-                  <span className="font-semibold text-slate-800 truncate">{d.category}</span>
-                  <span className="text-[11px] text-slate-500">({d.count})</span>
-                </div>
-                <div className="flex items-center gap-2.5 shrink-0 font-mono-num">
-                  <span className="text-slate-500">{pct}%</span>
-                  <span className="font-bold text-slate-900">{formatINR(d.total_paise)}</span>
-                </div>
-              </div>
-              <div className="h-1.5 w-full rounded-full bg-slate-200 overflow-hidden">
-                <motion.div
-                  initial={{ width: 0 }}
-                  animate={{ width: `${Math.max(3, pct)}%` }}
-                  transition={{ duration: 0.55, delay: i * 0.05, ease: 'easeOut' }}
-                  className="h-full rounded-full"
-                  style={{ backgroundColor: color }}
+              <div className="flex items-center gap-2 min-w-0">
+                <span
+                  className="w-2.5 h-2.5 rounded-sm shrink-0"
+                  style={{ backgroundColor: CHART_PALETTE[i % CHART_PALETTE.length] }}
                 />
+                <span className="font-medium text-slate-800 truncate">{d.category}</span>
+              </div>
+              <div className="flex items-center gap-3 shrink-0 font-mono-num">
+                <span className="text-slate-500">{pct}%</span>
+                <span className="font-semibold text-slate-900">{formatINR(d.total_paise)}</span>
               </div>
             </div>
           );
@@ -235,12 +221,10 @@ export const HorizontalBarChart: React.FC<{
               <span className="font-mono-num font-semibold text-slate-900">{formatINR(item.valuePaise)}</span>
             </div>
             <div className="h-2.5 w-full bg-slate-100 rounded-full overflow-hidden">
-              <motion.div
-                initial={{ width: 0 }}
-                animate={{ width: `${widthPct}%` }}
-                transition={{ duration: 0.55, delay: idx * 0.04, ease: 'easeOut' }}
-                className="h-full rounded-full"
+              <div
+                className="h-full rounded-full transition-all duration-500"
                 style={{
+                  width: `${widthPct}%`,
                   backgroundColor: item.color || CHART_PALETTE[idx % CHART_PALETTE.length],
                 }}
               />

@@ -12,8 +12,6 @@ import {
 import { apiRequest } from '../../services/api.ts';
 import { formatINR } from '../../utils/currency.ts';
 import { CategoryDonutChart, MonthlyTrendChart, type CategoryPoint, type MonthlyPoint } from '../charts/FinancialCharts.tsx';
-import { DashboardRadialHub } from '../three/DashboardRadialHub.tsx';
-import { InstantQrHub } from './InstantQrHub.tsx';
 import type {
   ActivityRecord,
   AppRoute,
@@ -27,17 +25,6 @@ interface DashboardViewProps {
   user: AuthUser;
   onNavigate: (route: AppRoute, params?: { groupId?: number; expenseId?: number }) => void;
   onReplayOnboarding: () => void;
-  onOpenPayQr: (target: {
-    groupId: number;
-    groupName: string;
-    payerUserId: number;
-    payerName: string;
-    receiverUserId: number;
-    receiverName: string;
-    amountPaise: number;
-  }) => void;
-  onToast?: (msg: string, tone?: 'success' | 'error') => void;
-  refreshSignal?: number;
 }
 
 const AnimatedRupeeCounter: React.FC<{ targetPaise: number; className?: string }> = ({
@@ -71,9 +58,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   user,
   onNavigate,
   onReplayOnboarding,
-  onOpenPayQr,
-  onToast,
-  refreshSignal = 0,
 }) => {
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState({
@@ -127,7 +111,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     return () => {
       active = false;
     };
-  }, [refreshSignal]);
+  }, []);
 
   if (loadError) {
     return (
@@ -318,37 +302,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-      {/* Centerpiece 3D Interactive Radial Debt & Expense Network */}
-      <DashboardRadialHub
-        groups={groups}
-        transfers={transfers}
-        userId={user.id}
-        netBalancePaise={summary.netBalancePaise}
-        totalGroupExpenditurePaise={summary.totalGroupExpenditurePaise}
-        onNavigate={onNavigate}
-        onOpenPayQr={onOpenPayQr}
-      />
-
-      {/* Charts Row: Prominent Expenditure Distribution & Trends */}
+      {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div className="lg:col-span-6 bg-white border border-slate-200 rounded-xl p-6">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h2 className="font-display text-base font-bold text-slate-900">Expenditure Distribution</h2>
-              <p className="text-xs text-slate-500">Category breakdown with exact INR &amp; % shares</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => onNavigate('/analytics')}
-              className="text-xs font-semibold text-[#065F46] hover:underline cursor-pointer"
-            >
-              Full Analytics
-            </button>
-          </div>
-          <CategoryDonutChart data={byCategory} />
-        </div>
-
-        <div className="lg:col-span-6 bg-white border border-slate-200 rounded-xl p-6">
+        <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-6">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="font-display text-base font-bold text-slate-900">Monthly Expenditure Trend</h2>
@@ -359,23 +315,77 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               onClick={() => onNavigate('/analytics')}
               className="text-xs font-semibold text-[#065F46] hover:underline cursor-pointer"
             >
-              Export CSV
+              Full Analytics
             </button>
           </div>
           <MonthlyTrendChart data={monthlyTrend} />
         </div>
+
+        <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6">
+          <div className="mb-4">
+            <h2 className="font-display text-base font-bold text-slate-900">Category Breakdown</h2>
+            <p className="text-xs text-slate-500">Where your shared groups spend most</p>
+          </div>
+          <CategoryDonutChart data={byCategory} />
+        </div>
       </div>
 
-      {/* Instant QR Hub + Suggested Settlements */}
+      {/* Groups + Suggested Settlements */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div className="lg:col-span-7">
-          <InstantQrHub
-            groups={groups}
-            transfers={transfers}
-            currentUser={user}
-            onOpenPayQr={onOpenPayQr}
-            onToast={onToast}
-          />
+        <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-display text-base font-bold text-slate-900">My Groups</h2>
+            <button
+              type="button"
+              onClick={() => onNavigate('/groups')}
+              className="text-xs font-semibold text-[#065F46] hover:underline cursor-pointer"
+            >
+              View All
+            </button>
+          </div>
+
+          <div className="divide-y divide-slate-100">
+            {groups.slice(0, 4).map((g) => (
+              <div
+                key={g.id}
+                onClick={() => onNavigate('/groups', { groupId: g.id })}
+                className="py-3.5 flex items-center justify-between gap-4 hover:bg-slate-50 -mx-2 px-2 rounded-lg cursor-pointer transition-colors"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div
+                    className="w-10 h-10 rounded-lg text-white font-display font-bold text-sm flex items-center justify-center shrink-0"
+                    style={{ backgroundColor: g.coverColor }}
+                  >
+                    {g.name.slice(0, 2).toUpperCase()}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-semibold text-sm text-slate-900 truncate">{g.name}</p>
+                    <p className="text-xs text-slate-500">
+                      {g.category} · {g.memberCount} members · {g.expenseCount} expenses
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right shrink-0">
+                  <p
+                    className={`font-mono-num text-sm font-semibold ${
+                      g.myNetBalancePaise > 0
+                        ? 'text-[#065F46]'
+                        : g.myNetBalancePaise < 0
+                        ? 'text-[#B91C1C]'
+                        : 'text-slate-500'
+                    }`}
+                  >
+                    {g.myNetBalancePaise > 0
+                      ? `+${formatINR(g.myNetBalancePaise)}`
+                      : formatINR(g.myNetBalancePaise)}
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    {g.myNetBalancePaise > 0 ? 'owed to you' : g.myNetBalancePaise < 0 ? 'you owe' : 'settled'}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6">
@@ -415,85 +425,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     </p>
                     <button
                       type="button"
-                      onClick={() =>
-                        t.groupId
-                          ? onOpenPayQr({
-                              groupId: t.groupId,
-                              groupName: t.groupName || 'Group',
-                              payerUserId: t.fromUserId,
-                              payerName: t.fromName,
-                              receiverUserId: t.toUserId,
-                              receiverName: t.toName,
-                              amountPaise: t.amountPaise,
-                            })
-                          : onNavigate('/settlements')
-                      }
+                      onClick={() => onNavigate('/settlements')}
                       className="text-xs font-semibold text-[#065F46] hover:underline cursor-pointer"
                     >
-                      Pay QR
+                      Settle
                     </button>
                   </div>
                 </div>
               ))}
             </div>
           )}
-        </div>
-      </div>
-
-      {/* My Groups */}
-      <div className="bg-white border border-slate-200 rounded-xl p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="font-display text-base font-bold text-slate-900">My Groups</h2>
-          <button
-            type="button"
-            onClick={() => onNavigate('/groups')}
-            className="text-xs font-semibold text-[#065F46] hover:underline cursor-pointer"
-          >
-            View All
-          </button>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {groups.slice(0, 4).map((g) => (
-            <div
-              key={g.id}
-              onClick={() => onNavigate('/groups', { groupId: g.id })}
-              className="p-3.5 border border-slate-200 rounded-xl flex items-center justify-between gap-4 hover:bg-slate-50 cursor-pointer transition-colors"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div
-                  className="w-10 h-10 rounded-lg text-white font-display font-bold text-sm flex items-center justify-center shrink-0"
-                  style={{ backgroundColor: g.coverColor }}
-                >
-                  {g.name.slice(0, 2).toUpperCase()}
-                </div>
-                <div className="min-w-0">
-                  <p className="font-semibold text-sm text-slate-900 truncate">{g.name}</p>
-                  <p className="text-xs text-slate-500">
-                    {g.category} · {g.memberCount} members · {g.expenseCount} expenses
-                  </p>
-                </div>
-              </div>
-              <div className="text-right shrink-0">
-                <p
-                  className={`font-mono-num text-sm font-semibold ${
-                    g.myNetBalancePaise > 0
-                      ? 'text-[#065F46]'
-                      : g.myNetBalancePaise < 0
-                      ? 'text-[#B91C1C]'
-                      : 'text-slate-500'
-                  }`}
-                >
-                  {g.myNetBalancePaise > 0
-                    ? `+${formatINR(g.myNetBalancePaise)}`
-                    : formatINR(g.myNetBalancePaise)}
-                </p>
-                <p className="text-[11px] text-slate-500">
-                  {g.myNetBalancePaise > 0 ? 'owed to you' : g.myNetBalancePaise < 0 ? 'you owe' : 'settled'}
-                </p>
-              </div>
-            </div>
-          ))}
         </div>
       </div>
 
