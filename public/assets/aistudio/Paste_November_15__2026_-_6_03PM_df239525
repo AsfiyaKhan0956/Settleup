@@ -1,0 +1,995 @@
+# MASTER PROJECT PROMPT — SETTLEUP
+## Build a premium, animated, production-quality group expense management platform
+
+You are my senior software architect, full-stack developer, UI/UX designer, 3D web designer, database engineer, security engineer, testing engineer and technical mentor.
+
+I want you to help me rebuild my entire college mini-project, **SettleUp**, from a clean and well-organised foundation.
+
+This is extremely important to me. Do not treat this as a simple CRUD application, a generic expense tracker, or a basic college assignment.
+
+I want to build a complete, visually exceptional, technically sound and genuinely useful group expense management platform.
+
+I am a beginner in programming and will use AI-assisted coding. However, I do not want code that I cannot understand. Every major implementation decision must be explained in beginner-friendly language, and the final project must be professional enough to demonstrate to engineering faculty, developers and real users.
+
+My academic objective is to apply concepts learned during the first five semesters of Computer Science Engineering to solve a real-world problem.
+
+My deadline is November 27, 2026. Work efficiently, prioritise the essential working application, and do not waste time on unnecessary complexity.
+
+---
+
+# 1. PROJECT IDENTITY
+
+Project name: SettleUp
+
+Project category: Full-stack collaborative group expense management and settlement platform.
+
+Core purpose:
+
+SettleUp helps friends, roommates, students, families and travelling groups record shared expenses, split costs fairly, track individual contributions, understand who owes whom, and settle their balances transparently.
+
+It must solve real-life financial sharing problems, including situations where different people consume different items and therefore should not pay equal amounts.
+
+It is NOT a banking application, wallet provider or payment gateway.
+
+It should have its own recognisable visual identity, premium user experience and complete functional workflows.
+
+# 2. TECHNICAL STACK
+
+Use the following beginner-friendly stack:
+
+Frontend:
+- HTML5
+- CSS3
+- Vanilla JavaScript
+- Responsive design
+- GSAP for advanced animation
+- Three.js for selected 3D elements where justified
+- Chart.js or an appropriate lightweight chart library
+
+Backend:
+- Python
+- Flask
+- Flask Blueprints or a similarly organised modular architecture
+- REST-style APIs where appropriate
+
+Database:
+- MySQL
+- Proper relational database design
+- Foreign keys, indexes and constraints
+- Database transactions for financial operations
+
+Development:
+- Visual Studio Code
+- Python virtual environment
+- Git and GitHub
+- Environment variables for secrets
+- requirements.txt
+- .env.example
+- README.md
+
+Do not migrate the entire application to React, Next.js or another framework without first demonstrating a compelling technical necessity. Preserve the specified stack.
+
+# 3. VISUAL DESIGN AND ART DIRECTION
+
+This is one of the highest-priority requirements.
+
+I do NOT want:
+- Generic AI-generated dashboards.
+- Ordinary bootstrap-looking pages.
+- Random purple gradients.
+- Excessive rounded cards.
+- Unnecessary floating circles.
+- Cluttered layouts.
+- Cheap-looking animations.
+- Basic forms with no visual identity.
+- Empty dashboards.
+- Decorative 3D elements that serve no purpose.
+
+I want a modern, sophisticated, premium fintech product with a distinctive visual identity.
+
+Research these references before designing:
+
+1. Taste Skill — study its anti-generic design philosophy, design discipline, motion direction and redesign approach.
+2. 21st.dev — study animated landing pages, component interactions, navigation, dashboards, tooltips and AI interface components.
+3. ThreeUI — study Three.js, WebGL, geometric objects, isometric visualisation and dimensional elements.
+4. GSAP — study ScrollTrigger, timelines, staggered animation, pinned sections and controlled motion.
+5. Webflow — study sophisticated website transitions and interaction choreography.
+6. Dribbble and Behance — collect professional fintech and SaaS design references.
+
+Do not blindly copy any website. Create an original SettleUp visual identity.
+
+## Visual requirements
+
+- Sophisticated 3D geometric identity.
+- Floating wallets, coins, connected geometric objects and financial illustrations.
+- Layered depth and realistic lighting.
+- Professional typography hierarchy.
+- Beautiful composition and intentional whitespace.
+- Premium navigation and sidebar.
+- Carefully designed colour system.
+- Smooth transitions.
+- High-quality hover and click feedback.
+- Beautiful data visualisation.
+- Consistent design across all pages.
+- Mobile, tablet and desktop responsiveness.
+
+Choose a coherent visual direction before coding. Present the palette, typography, component system and visual reference board for approval.
+
+## Motion requirements
+
+Use GSAP and Three.js selectively.
+
+Implement:
+- Animated hero entrance.
+- 3D object movement.
+- Pointer-responsive visual elements.
+- Staggered typography.
+- Scroll-triggered section reveals.
+- Smooth page transitions.
+- Animated numerical counters.
+- Animated charts.
+- Subtle card hover effects.
+- Interactive buttons.
+- Loading transitions.
+- Success and error feedback.
+
+Animations must be purposeful, smooth and performant.
+
+Support reduced-motion preferences and ensure that animation never blocks important actions.
+
+# 4. COMPLETE WEBSITE INTERFACES
+
+Build every interface below as part of one consistent product.
+
+## A. Public-facing website
+
+### 1. Landing page
+
+Create an exceptional animated landing page that makes visitors interested in exploring SettleUp.
+
+Include:
+- Premium navigation.
+- Distinctive animated 3D hero.
+- Strong headline and tagline.
+- Clear explanation of the problem SettleUp solves.
+- Interactive product demonstration.
+- How SettleUp works.
+- Expense-splitting demonstration.
+- Feature sections.
+- Visual explanation of balances and settlements.
+- Trust and privacy information.
+- Frequently asked questions.
+- Call-to-action sections.
+- Professional footer.
+
+Do not make the landing page look like an ordinary college project.
+
+### 2. Login page
+
+Include:
+- Email and password.
+- Password visibility toggle.
+- Remember-me option where appropriate.
+- Forgot-password workflow.
+- Validation and error feedback.
+- Secure session management.
+- Link to registration.
+- Consistent animated visual identity.
+
+### 3. Registration page
+
+Include:
+- Full name.
+- Email.
+- Password.
+- Confirm password.
+- Profile picture upload.
+- Password strength indicator.
+- Input validation.
+- Account creation.
+- Successful registration experience.
+
+Implement secure password hashing. Never store plain-text passwords.
+
+### 4. Forgot password and account recovery
+
+Implement a secure password reset workflow using expiring tokens and appropriate email configuration. If email delivery cannot be configured, document the limitation and provide a safe development workflow.
+
+## B. Authenticated dashboard
+
+### 5. Main dashboard overview
+
+This must be a meaningful financial dashboard, not a blank page.
+
+Display:
+
+Financial summary:
+- Total amount I owe.
+- Total amount others owe me.
+- Net balance.
+- Total group expenditure.
+- My total contributions.
+- Pending settlements.
+
+Visual analytics:
+- Monthly expenditure line chart.
+- Category-wise spending pie or doughnut chart.
+- Group-wise expenditure chart.
+- Income/expense-style summary where appropriate, without inventing income.
+- Spending trends.
+- Recent transactions.
+
+Other sections:
+- My groups.
+- Recent activity.
+- Pending payments.
+- Upcoming settlements.
+- Quick actions.
+- Welcome message with profile picture.
+- Notifications.
+
+All charts must use real database data and respond to filters and date ranges. Do not use permanently hardcoded demonstration numbers.
+
+For a new account, provide a beautiful onboarding dashboard and meaningful empty states.
+
+### 6. My Groups
+
+Implement:
+- Create group.
+- Edit group.
+- Delete or archive group with appropriate safeguards.
+- Group name.
+- Group description.
+- Group profile picture or cover image.
+- Group category.
+- Group creation date.
+- Total members.
+- Total expenses.
+- Group balance.
+- Search and filters.
+
+Groups should feel familiar to users of WhatsApp or other modern social applications.
+
+### 7. Group workspace
+
+Every group should have its own detailed workspace.
+
+Include:
+- Group name and picture.
+- Group description.
+- Member list.
+- Member profile pictures.
+- Member roles and permissions.
+- Group invitation link.
+- Group QR code.
+- Total group expenditure.
+- Individual contributions.
+- Member-wise balances.
+- Expense timeline.
+- Group analytics.
+- Group activity.
+- Add expense.
+- Settlement information.
+- Group settings.
+
+Allow users to view member details and understand each member's financial contribution.
+
+### 8. Add and manage members
+
+Include:
+- Invite through email where configured.
+- Shareable invitation link.
+- QR-code invitations.
+- Join requests or invitation acceptance.
+- Remove members with financial-history safeguards.
+- Role and permission management.
+- Pending invitations.
+- Member status.
+
+A group QR code must resolve to a secure invitation URL, not automatically grant access.
+
+### 9. Add expense interface
+
+This is a core feature.
+
+Allow users to enter:
+
+- Expense title.
+- Description.
+- Amount.
+- Currency.
+- Date and time.
+- Category.
+- Paid by.
+- Group.
+- Participants.
+- Expense receipt or attachment.
+- Optional notes.
+
+Provide multiple splitting methods:
+
+1. Equal split.
+2. Exact amount split.
+3. Percentage split.
+4. Custom participant shares.
+5. Item-wise split.
+
+Provide clear calculations before saving.
+
+### 10. Item-wise expense splitting — CRITICAL REQUIREMENT
+
+This is the main real-world problem-solving demonstration.
+
+Scenario A:
+
+Five friends visit a restaurant.
+
+- Four people drink tea.
+- One person orders expensive coffee instead.
+- Everyone shares the samosas.
+- Only four people should pay for tea.
+- Only the coffee consumer should pay for coffee.
+- All five should contribute to the samosas.
+
+The application must calculate each person's contribution accurately.
+
+Scenario B:
+
+Five friends buy food.
+
+- Four people consume tea.
+- One person does not drink tea.
+- All five consume samosas.
+- Each item has its own price.
+- The application must calculate the exact amount each person owes.
+
+Implement an itemised bill interface where users can:
+
+- Add multiple items.
+- Enter item name and price.
+- Set quantity.
+- Select which members consumed each item.
+- Split an item equally among selected members.
+- Assign exact quantities or custom shares.
+- Add applicable tax, discount and tip.
+- Allocate shared charges transparently.
+- Preview each member's contribution.
+- Verify that the total allocated amount equals the bill total.
+
+Example:
+
+Tea: ₹100 / 4 consumers = ₹25 each.
+
+Coffee: ₹120 / 1 consumer = ₹120.
+
+Samosas: ₹150 / 5 consumers = ₹30 each.
+
+Final:
+- Four tea consumers pay ₹55 each.
+- The coffee consumer pays ₹150.
+
+The calculation engine must be accurate and tested.
+
+Use integer paise internally rather than floating-point money calculations. Handle rounding differences explicitly and transparently.
+
+### 11. Expense history
+
+Display:
+- Complete expense history.
+- Expense title.
+- Amount.
+- Date.
+- Group.
+- Paid by.
+- Participants.
+- Category.
+- Payment status.
+- Search and filters.
+- Sort options.
+
+### 12. Expense details
+
+Every transaction must have a detailed page.
+
+Show:
+- Who created the expense.
+- Who paid.
+- What was purchased.
+- Why the expense was created.
+- Date and time.
+- Total amount.
+- Individual item prices.
+- Participants.
+- Individual shares.
+- Tax and discounts.
+- Supporting receipt.
+- Payment and settlement status.
+
+Allow authorised editing and deletion, with a clear audit trail where appropriate.
+
+### 13. Balances — Who owes whom?
+
+Create a clear balance management interface.
+
+Show:
+- People I owe.
+- People who owe me.
+- Individual balances.
+- Group balances.
+- Outstanding amounts.
+- Simplified debt relationships.
+- Detailed calculation explanation.
+
+### 14. Settlements
+
+Implement:
+- Suggested settlements.
+- Payer.
+- Receiver.
+- Amount.
+- Group.
+- Settlement date.
+- Payment method.
+- Pending, recorded and confirmed statuses.
+- Settlement history.
+- Settlement receipt or reference.
+
+Use a transparent debt simplification algorithm. Never modify historical expenses when settling a balance.
+
+### 15. Payment QR functionality
+
+Provide a separate payment QR workflow.
+
+Support an appropriate Indian UPI-compatible payment intent or QR format where technically supported.
+
+Include:
+- Recipient information.
+- Amount.
+- Payment reference.
+- QR display.
+- Copy payment details.
+- Clear instructions for PhonePe, Google Pay and other compatible UPI applications.
+- Payment reference submission.
+- Verified payment confirmation workflow.
+
+Important:
+A QR scan is not proof of payment. Do not automatically mark an expense settled just because a QR was displayed or scanned.
+
+If there is no verified payment gateway or provider integration, use a transparent manual confirmation workflow.
+
+Do not claim to be a payment gateway.
+
+## C. Analytics and reports
+
+### 16. Analytics dashboard
+
+This is a high-priority interface.
+
+Create interactive charts for:
+
+- Monthly expenditure.
+- Weekly expenditure.
+- Category-wise spending.
+- Group-wise spending.
+- Individual contributions.
+- Member-wise expenditure.
+- Highest expenditure categories.
+- Spending trends.
+- Settled versus pending amounts.
+- Item-wise spending when data permits.
+
+Example categories:
+- Food.
+- Travel.
+- Shopping.
+- Accommodation.
+- Entertainment.
+- Groceries.
+- Transportation.
+- Other.
+
+Provide date filters and group filters.
+
+### 17. Reports
+
+Allow users to:
+- View monthly reports.
+- View group reports.
+- View individual contribution reports.
+- Export CSV.
+- Generate PDF summaries where feasible.
+- View expense breakdowns.
+
+Never expose another user's private financial information without appropriate group permissions.
+
+## D. Social and account interfaces
+
+### 18. Activity and notifications
+
+Include:
+- New expense added.
+- Expense updated.
+- Member invited.
+- Member joined.
+- Settlement recorded.
+- Settlement confirmed.
+- Group updates.
+- Relevant account notifications.
+
+### 19. Profile and settings
+
+Include:
+- Profile picture upload and update.
+- Full name.
+- Email.
+- Account details.
+- Password changes.
+- Notification settings.
+- Theme preferences.
+- Currency preference.
+- Privacy settings.
+- Account deletion.
+- Logout.
+
+### 20. Invitations and QR management
+
+Provide:
+- Generate invitation links.
+- Generate group QR codes.
+- Scan invitation QR codes.
+- Manage invitation status.
+- Revoke expired or unwanted invitations.
+- Prevent unauthorised group access.
+
+## E. Communication and intelligent assistance
+
+### 21. Optional group chat
+
+Create a group communication feature if time and secure implementation permit.
+
+Potential capabilities:
+- Text messages.
+- Expense-related discussion.
+- Payment-related messages.
+- Message timestamps.
+- Sender profile pictures.
+- Basic message notifications.
+
+Keep group chat optional. Financial expense management must work even when users do not use chat.
+
+Do not claim end-to-end encryption unless genuine end-to-end encryption is implemented and independently tested. Otherwise use appropriate transport encryption, secure access control and data protection.
+
+### 22. SettleUp AI assistant
+
+Create a small floating AI help assistant accessible throughout the application.
+
+Users should be able to ask:
+- How do I create a group?
+- How do I add an expense?
+- How do I split a bill?
+- Why do I owe this amount?
+- How do I invite a member?
+- How do I settle my balance?
+- How do I generate a QR code?
+
+It should provide understandable explanations and guide users to the relevant interface.
+
+If an AI API is used:
+- Keep API keys on the backend.
+- Do not expose credentials in frontend JavaScript.
+- Restrict the assistant to authorised user information.
+- Do not leak group or personal financial information.
+- Provide a fallback help centre if the AI service is unavailable.
+
+### 23. Interactive onboarding and cursor guidance
+
+Create a proper guided experience for first-time users.
+
+Include:
+- Welcome screen.
+- Guided dashboard tour.
+- Highlighted interactive elements.
+- Animated pointer demonstration.
+- Tooltips explaining each important button.
+- Create-group walkthrough.
+- Add-expense walkthrough.
+- Item-wise splitting demonstration.
+- Settlement walkthrough.
+- QR invitation demonstration.
+- Replay and skip options.
+- Contextual help.
+
+Make the interface friendly for users of different ages and technical abilities.
+
+# 5. DATABASE AND BACKEND ARCHITECTURE
+
+Design a normalised MySQL database.
+
+Evaluate appropriate entities such as:
+
+- users
+- groups
+- group_members
+- invitations
+- expenses
+- expense_items
+- expense_participants
+- item_consumers
+- expense_splits
+- settlements
+- payment_references
+- notifications
+- activity_logs
+- user_preferences
+- attachments
+- messages (if chat is implemented)
+
+Use proper relationships and constraints.
+
+Explain:
+- Primary keys.
+- Foreign keys.
+- One-to-one relationships.
+- One-to-many relationships.
+- Many-to-many relationships.
+- Normalisation.
+- Indexing.
+- Transactions.
+- Data integrity.
+
+Use database transactions for operations that affect multiple financial records.
+
+Provide ER diagrams and explain the complete schema.
+
+# 6. SECURITY, PRIVACY AND ACCESSIBILITY
+
+Implement:
+
+- Password hashing.
+- Secure sessions.
+- CSRF protection.
+- Input validation.
+- SQL injection prevention.
+- XSS prevention.
+- Access control.
+- Role-based group permissions.
+- Secure file uploads.
+- Rate limiting for sensitive endpoints.
+- Environment-based secret management.
+- HTTPS-ready configuration.
+- Safe invitation tokens.
+- Financial audit trails.
+- Appropriate privacy controls.
+
+Protect each user's data and enforce group membership before allowing access to group information.
+
+Do not claim end-to-end encryption for data that the server must read and process. If E2EE chat is implemented, design it as a separate cryptographic subsystem.
+
+Accessibility:
+- Keyboard navigation.
+- Visible focus states.
+- Readable contrast.
+- Screen-reader-friendly labels.
+- Clear error messages.
+- Reduced-motion support.
+- Responsive layouts.
+
+Environmental responsibility:
+- Minimise unnecessary network requests.
+- Optimise images and 3D assets.
+- Use efficient animations.
+- Support lower-powered devices.
+- Prefer digital receipts and reports.
+- Avoid unnecessary background processing.
+
+# 7. ACADEMIC INTEGRATION — FIRST TO FIFTH SEMESTER
+
+My main academic objective is to demonstrate how concepts studied during the first five semesters of CSE can solve a real-world problem.
+
+Map the actual concepts used in SettleUp to the subjects from my VTU curriculum.
+
+Explore relevant areas such as:
+
+1. Programming fundamentals:
+   Conditions, loops, functions, arrays, modular programming and problem-solving.
+
+2. Mathematics:
+   Percentages, ratios, averages, rounding, financial calculations and numerical accuracy.
+
+3. Data Structures and Algorithms:
+   Lists, dictionaries, searching, sorting, graph representations and settlement optimisation.
+
+4. Database Management Systems:
+   SQL, joins, normalisation, constraints, relationships and transactions.
+
+5. Discrete Mathematics:
+   Sets, relations, graphs and graph-based representations of financial relationships.
+
+6. Python and Object-Oriented Programming:
+   Classes, objects, modularity, exceptions and reusable logic.
+
+7. Web technologies:
+   HTML, CSS, JavaScript, HTTP, forms, APIs and responsive interfaces.
+
+8. Computer Networks:
+   Client-server architecture, HTTP/HTTPS, request-response flow and API communication.
+
+9. Software Engineering:
+   Requirements, architecture, modular design, testing, version control and project documentation.
+
+10. Statistics and data visualisation:
+    Aggregation, category analysis, trends, charts and reporting.
+
+Do not invent syllabus codes or falsely claim that a subject was implemented.
+
+Create a subject-to-feature mapping explaining:
+- The subject.
+- The exact concept.
+- Where it is implemented.
+- Why it is required.
+- A practical example from SettleUp.
+- How I should explain it during my viva.
+
+# 8. BEGINNER-FRIENDLY CODE GENERATION
+
+I am a beginner.
+
+This requirement is mandatory.
+
+Do not generate unnecessarily complicated code just to make the project appear advanced.
+
+Use professional architecture with readable implementation.
+
+For every important file, explain:
+- Why the file exists.
+- What it contains.
+- How it connects to other files.
+- What each major function does.
+- What input it receives.
+- What output it produces.
+- How the code works step by step.
+- What would happen if an important line or condition were removed.
+
+Add meaningful comments, but do not comment every obvious line unnecessarily.
+
+Use descriptive variable and function names.
+
+Avoid:
+- Unexplained abstractions.
+- Unnecessary dependencies.
+- Duplicate code.
+- Extremely long files.
+- Hardcoded financial values.
+- Hardcoded fake analytics.
+- Exposing secrets.
+- Unnecessary complexity.
+
+Provide a clear folder structure before generating code.
+
+# 9. TESTING AND VERIFICATION
+
+Do not claim a feature works merely because its code exists.
+
+Implement:
+- Unit tests.
+- Backend API tests.
+- Database integration tests.
+- Authentication tests.
+- Expense calculation tests.
+- Item-wise split tests.
+- Balance calculation tests.
+- Settlement tests.
+- Permission and security tests.
+- Responsive UI tests.
+- Browser interaction tests.
+
+Verify the five-person tea, coffee and samosa scenario.
+
+Verify:
+- Equal splitting.
+- Unequal splitting.
+- Custom amounts.
+- Percentage splits.
+- Rounding.
+- Multiple currencies if implemented.
+- Settlement calculations.
+- Group membership permissions.
+- Invitation expiry.
+- Payment confirmation behaviour.
+
+Test actual user workflows from registration to final settlement.
+
+Use real browser testing where browser automation is available. Report which browsers, devices and viewport sizes were actually tested.
+
+# 10. DOCUMENTATION AND PRESENTATION PREPARATION
+
+My academic success is just as important as the application.
+
+Create a complete learning and presentation package.
+
+Required documentation:
+
+1. Project abstract.
+2. Problem statement.
+3. Objectives.
+4. Existing system and limitations.
+5. Proposed system.
+6. Scope.
+7. Functional requirements.
+8. Non-functional requirements.
+9. Software and hardware requirements.
+10. System architecture.
+11. ER diagram.
+12. DFD diagrams.
+13. Use-case diagram.
+14. Sequence diagrams.
+15. Database documentation.
+16. API documentation.
+17. Algorithms and pseudocode.
+18. Test cases and test results.
+19. Limitations.
+20. Future enhancements.
+21. Conclusion.
+
+Also prepare:
+
+- Presentation slide outline.
+- Slide-by-slide speaking notes.
+- Technical terminology glossary.
+- Beginner-friendly explanation of the entire codebase.
+- Module-wise explanation.
+- Database viva questions.
+- Python and Flask viva questions.
+- HTML/CSS/JavaScript viva questions.
+- DSA and algorithm viva questions.
+- Security viva questions.
+- Real-world problem-solving questions.
+- Difficult questions a strict engineering faculty member might ask.
+- Model answers in simple, understandable English.
+
+Every technical claim must correspond to something actually implemented or tested.
+
+Clearly separate completed features from proposed features.
+
+# 11. DEVELOPMENT WORKFLOW
+
+I want you to follow this workflow strictly.
+
+STEP 1 — AUDIT AND SAFETY
+
+Inspect my existing repository before making changes.
+
+I want a clean rebuild, but first:
+- Create a backup or safe Git checkpoint.
+- Identify existing files.
+- Identify useful reusable work.
+- Inspect the existing database and schema.
+- Preserve .env and secrets.
+- Preserve project documentation and Git history.
+- Identify dependencies and current test status.
+
+Do not destroy the only working copy or database.
+
+STEP 2 — REQUIREMENTS AND ARCHITECTURE
+
+Create:
+- Feature specification.
+- User journeys.
+- Database schema.
+- Application architecture.
+- Folder structure.
+- Design system.
+- API plan.
+- Development milestones.
+
+STEP 3 — VISUAL DESIGN
+
+Before coding the entire application:
+- Present the brand direction.
+- Present landing-page references.
+- Present dashboard references.
+- Define animations.
+- Define responsive layouts.
+- Build and verify the landing page.
+- Obtain my approval before proceeding to the remaining interfaces.
+
+STEP 4 — IMPLEMENTATION
+
+Develop in small, organised, testable stages.
+
+Do not dump the entire project into one enormous code response.
+
+Do not overwrite working files without explaining why.
+
+Maintain:
+- README.md
+- CHANGELOG.md
+- PROJECT_STATUS.md
+- TEST_REPORT.md
+- LEARNING_NOTES.md
+
+After every stage:
+- Explain what was built.
+- Explain which files changed.
+- Run relevant tests.
+- Report what works.
+- Report what remains incomplete.
+
+STEP 5 — FINAL VERIFICATION
+
+Run the complete application.
+
+Test actual workflows.
+
+Inspect the rendered interfaces.
+
+Fix functional, visual and responsive issues.
+
+Do not claim success without evidence.
+
+# 12. PROJECT PRIORITIES
+
+The application must be completed in this order:
+
+Priority 1:
+- Complete authentication.
+- Landing page.
+- Registration and login.
+- Main dashboard.
+- Groups and members.
+- Expense creation.
+- Item-wise and custom splitting.
+- Expense history.
+- Balances.
+- Settlement calculations.
+
+Priority 2:
+- Profile pictures.
+- Invitations.
+- Group QR.
+- Payment QR workflow.
+- Analytics and reports.
+- Notifications.
+- Settings.
+- Interactive onboarding.
+
+Priority 3:
+- AI help assistant.
+- Optional group chat.
+- Advanced 3D effects.
+- Additional integrations.
+
+Do not sacrifice financial correctness or essential functionality to create impressive animations.
+
+# 13. YOUR FIRST RESPONSE TO ME
+
+Do NOT immediately start generating hundreds of lines of code.
+
+First provide:
+
+1. Your understanding of SettleUp.
+2. The real-world problems it will solve.
+3. The proposed complete feature list.
+4. The architecture.
+5. The proposed database entities.
+6. The frontend interface inventory.
+7. The design and animation direction.
+8. The academic subject mapping.
+9. The implementation milestones.
+10. The major technical risks and realistic scope for the deadline.
+
+Then inspect my actual project files and propose the clean rebuild plan.
+
+Ask only essential clarification questions.
+
+Remember:
+
+I am a beginner who wants to build something professionally impressive and genuinely understand it.
+
+Your job is not just to write code.
+
+Your job is to help me build, test, explain, present and defend a complete engineering mini-project.
+
+**SettleUp must demonstrate real engineering, meaningful problem-solving, professional design, financial accuracy, security, accessibility and a clear understanding of the subjects I have studied.**
+
+Build it with care. Never pretend something is finished when it is not.

@@ -1,0 +1,87 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-display: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-sans: 'DM Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+
+    --bg-canvas: #F8FAFC;
+    --bg-surface: #FFFFFF;
+    --bg-subtle: #F1F5F9;
+    --border-hairline: #E2E8F0;
+    --ink-primary: #0F172A;
+    --ink-secondary: #475569;
+    --ink-muted: #64748B;
+    --accent-primary: #065F46;
+    --accent-primary-hover: #047857;
+    --accent-emerald: #059669;
+    --semantic-warning: #B45309;
+    --semantic-danger: #B91C1C;
+  }
+
+  html {
+    font-family: var(--font-sans);
+    background-color: var(--bg-canvas);
+    color: var(--ink-primary);
+    scroll-behavior: smooth;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: var(--font-display);
+  }
+
+  .font-mono-num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Smooth focus visibility for accessibility */
+*:focus-visible {
+  outline: 2px solid #065F46;
+  outline-offset: 2px;
+}
+
+/* Subtle horizontal scrollbar hiding for compact mobile tabs */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Print / PDF Summary Mode */
+@media print {
+  aside,
+  header,
+  .no-print {
+    display: none !important;
+  }
+  main {
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+  }
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+}
+
+/* Respect reduced motion accessibility preference */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
