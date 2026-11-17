@@ -2,9 +2,33 @@ import { Router } from 'express';
 import QRCode from 'qrcode';
 import { db } from '../db.ts';
 import { computeGroupBalances, getMembership, requireAuth, type AuthedRequest } from '../middleware.ts';
-import { generateOpaqueToken, isValidEmail } from '../security.ts';
+import { generateOpaqueToken, isValidEmail, normalizePhone } from '../security.ts';
+import { getPublicAppBaseUrl, isSmtpConfigured, isSmsConfigured, sendGroupInvitationEmail, sendGroupInvitationSms } from '../mailer.ts';
 
 export const groupsRouter = Router();
+
+function parseSqliteUtcMs(ts: string): number {
+  if (!ts) return 0;
+  const iso = ts.includes('T') ? (ts.endsWith('Z') ? ts : `${ts}Z`) : `${ts.replace(' ', 'T')}Z`;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function buildWhatsAppShareUrl(groupName: string, inviteUrl: string, phone?: string | null): string {
+  const message = `Hey! I've invited you to join my group "${groupName}" on SettleUp. Open this link to view and accept the invitation: ${inviteUrl}`;
+  const digits = phone ? phone.replace(/\D/g, '') : '';
+  return digits
+    ? `https://wa.me/${digits}?text=${encodeURIComponent(message)}`
+    : `https://wa.me/?text=${encodeURIComponent(message)}`;
+}
+
+function buildSmsShareUrl(groupName: string, inviterName: string, inviteUrl: string, phone?: string | null): string {
+  const message = `${inviterName} invited you to join "${groupName}" on SettleUp. Accept or decline here: ${inviteUrl}`;
+  const clean = phone ? phone.replace(/[^\d+]/g, '') : '';
+  return clean
+    ? `sms:${clean}?body=${encodeURIComponent(message)}`
+    : `sms:?body=${encodeURIComponent(message)}`;
+}
 
 groupsRouter.get('/', requireAuth, (req: AuthedRequest, res) => {
   const userId = req.user!.id;
@@ -73,7 +97,47 @@ groupsRouter.get('/', requireAuth, (req: AuthedRequest, res) => {
   res.json({ groups: enriched });
 });
 
-groupsRouter.post('/', requireAuth, (req: AuthedRequest, res) => {
+groupsRouter.get('/my-pending-invitations', requireAuth, (req: AuthedRequest, res) => {
+  const email = req.user!.email.toLowerCase();
+  const phone = req.user!.phone;
+
+  const rows = db
+    .prepare(`
+      SELECT i.id, i.group_id, i.channel, i.token, i.expires_at, i.created_at,
+             g.name AS group_name, g.description AS group_description, g.category AS group_category,
+             u.full_name AS inviter_name
+      FROM invitations i
+      JOIN groups g ON g.id = i.group_id
+      JOIN users u ON u.id = i.invited_by
+      WHERE i.status = 'pending'
+        AND datetime(i.expires_at) > datetime('now')
+        AND i.use_count < i.max_uses
+        AND (
+          lower(COALESCE(i.invitee_email, '')) = ?
+          OR (? IS NOT NULL AND i.invitee_phone = ?)
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM group_members gm WHERE gm.group_id = i.group_id AND gm.user_id = ?
+        )
+      ORDER BY i.created_at DESC
+    `)
+    .all(email, phone, phone, req.user!.id) as Array<{
+    id: number;
+    group_id: number;
+    channel: string;
+    token: string;
+    expires_at: string;
+    created_at: string;
+    group_name: string;
+    group_description: string;
+    group_category: string;
+    inviter_name: string;
+  }>;
+
+  res.json({ invitations: rows });
+});
+
+groupsRouter.post('/', requireAuth, async (req: AuthedRequest, res) => {
   const userId = req.user!.id;
   const { name, description, category, coverColor, memberEmails } = req.body as {
     name?: string;
@@ -93,8 +157,10 @@ groupsRouter.post('/', requireAuth, (req: AuthedRequest, res) => {
   const cleanCategory = allowedCategories.includes(category ?? '') ? category! : 'Friends';
   const cleanColor = /^#[0-9A-Fa-f]{6}$/.test(coverColor ?? '') ? coverColor! : '#065F46';
 
-  const result = db.transaction(() => {
-    const groupId = Number(
+  const pendingEmailTokens: Array<{ email: string; token: string; inviteId: number }> = [];
+
+  const groupId = db.transaction(() => {
+    const newGroupId = Number(
       db
         .prepare(`
           INSERT INTO groups (name, description, category, cover_color, created_by)
@@ -104,34 +170,40 @@ groupsRouter.post('/', requireAuth, (req: AuthedRequest, res) => {
     );
 
     db.prepare("INSERT INTO group_members (group_id, user_id, role) VALUES (?, ?, 'admin')").run(
-      groupId,
+      newGroupId,
       userId
     );
 
-    // Add existing registered users if emails supplied, otherwise create pending invitations
-    const emails = Array.isArray(memberEmails) ? memberEmails : [];
-    const addedNames: string[] = [];
-    for (const rawEmail of emails) {
-      const cleanEmail = rawEmail.trim().toLowerCase();
-      if (!isValidEmail(cleanEmail) || cleanEmail === req.user!.email) continue;
-      const found = db.prepare('SELECT id, full_name FROM users WHERE email = ?').get(cleanEmail) as
+    const emails = Array.isArray(memberEmails) ? Array.from(new Set(memberEmails.map((e) => e.trim().toLowerCase()))) : [];
+    const invitedEmails: string[] = [];
+    for (const cleanEmail of emails) {
+      if (!isValidEmail(cleanEmail) || cleanEmail === req.user!.email.toLowerCase()) continue;
+      const found = db.prepare('SELECT id, full_name FROM users WHERE lower(email) = ?').get(cleanEmail) as
         | { id: number; full_name: string }
         | undefined;
+      const token = generateOpaqueToken(16);
+      const inviteId = Number(
+        db
+          .prepare(`
+            INSERT INTO invitations (group_id, invited_by, invitee_email, channel, token, delivery_status, max_uses, expires_at)
+            VALUES (?, ?, ?, 'email', ?, 'pending', 1, datetime('now', '+14 days'))
+          `)
+          .run(newGroupId, userId, cleanEmail, token).lastInsertRowid
+      );
+      pendingEmailTokens.push({ email: cleanEmail, token, inviteId });
+      invitedEmails.push(cleanEmail);
+
+      // Never auto-add someone to a private group without their acceptance; send them a pending notification if registered
       if (found) {
-        db.prepare("INSERT OR IGNORE INTO group_members (group_id, user_id, role) VALUES (?, ?, 'member')").run(
-          groupId,
-          found.id
-        );
-        addedNames.push(found.full_name);
         db.prepare(`
           INSERT INTO notifications (user_id, group_id, type, title, message, link_path)
-          VALUES (?, ?, 'group_joined', 'Added to new group', ?, ?)
-        `).run(found.id, groupId, `${req.user!.fullName} added you to "${cleanName}".`, `/groups/${groupId}`);
-      } else {
-        db.prepare(`
-          INSERT INTO invitations (group_id, invited_by, invitee_email, token, expires_at)
-          VALUES (?, ?, ?, ?, datetime('now', '+14 days'))
-        `).run(groupId, userId, cleanEmail, generateOpaqueToken(16));
+          VALUES (?, ?, 'group_invite', 'Group invitation received', ?, ?)
+        `).run(
+          found.id,
+          newGroupId,
+          `${req.user!.fullName} invited you to join "${cleanName}". Would you like to join?`,
+          `/?invite=${token}`
+        );
       }
     }
 
@@ -139,16 +211,232 @@ groupsRouter.post('/', requireAuth, (req: AuthedRequest, res) => {
       INSERT INTO activity_logs (group_id, user_id, action, entity_type, entity_id, summary)
       VALUES (?, ?, 'group_created', 'group', ?, ?)
     `).run(
-      groupId,
+      newGroupId,
       userId,
-      groupId,
-      `${req.user!.fullName} created group "${cleanName}"${addedNames.length ? ` with ${addedNames.join(', ')}` : ''}`
+      newGroupId,
+      `${req.user!.fullName} created group "${cleanName}"${invitedEmails.length ? ` and invited ${invitedEmails.length} member(s)` : ''}`
     );
 
-    return groupId;
+    return newGroupId;
   })();
 
-  res.status(201).json({ groupId: result });
+  const baseUrl = getPublicAppBaseUrl(req);
+  let emailsSentCount = 0;
+  for (const item of pendingEmailTokens) {
+    const emailRes = await sendGroupInvitationEmail({
+      toEmail: item.email,
+      groupName: cleanName,
+      groupDescription: (description ?? '').trim(),
+      inviterName: req.user!.fullName,
+      inviteUrl: `${baseUrl}/?invite=${item.token}`,
+      expiresInDays: 14,
+    });
+    if (emailRes.delivered) emailsSentCount += 1;
+    db.prepare(`
+      UPDATE invitations
+      SET delivery_status = ?, delivery_error = ?, last_sent_at = CASE WHEN ? = 'sent' THEN datetime('now') ELSE NULL END
+      WHERE id = ?
+    `).run(emailRes.deliveryStatus, emailRes.errorMessage ?? null, emailRes.deliveryStatus, item.inviteId);
+  }
+
+  res.status(201).json({
+    groupId,
+    invitedCount: pendingEmailTokens.length,
+    emailsSentCount,
+    smtpConfigured: isSmtpConfigured(),
+  });
+});
+
+groupsRouter.get('/invite/:token', (req, res) => {
+  const token = (req.params.token ?? '').trim();
+  if (!token) {
+    res.status(404).json({ error: 'Invitation token is missing.' });
+    return;
+  }
+
+  const inv = db
+    .prepare(`
+      SELECT i.id, i.group_id, i.channel, i.status, i.max_uses, i.use_count, i.expires_at,
+             i.invitee_email, i.invitee_phone,
+             g.name AS group_name, g.description AS group_description, g.category AS group_category,
+             u.full_name AS inviter_name
+      FROM invitations i
+      JOIN groups g ON g.id = i.group_id
+      JOIN users u ON u.id = i.invited_by
+      WHERE i.token = ?
+    `)
+    .get(token) as
+    | {
+        id: number;
+        group_id: number;
+        channel: string;
+        status: string;
+        max_uses: number;
+        use_count: number;
+        expires_at: string;
+        invitee_email: string | null;
+        invitee_phone: string | null;
+        group_name: string;
+        group_description: string;
+        group_category: string;
+        inviter_name: string;
+      }
+    | undefined;
+
+  if (!inv) {
+    res.status(404).json({ error: 'Invitation link was not found or is invalid.' });
+    return;
+  }
+
+  const isExpired = parseSqliteUtcMs(inv.expires_at) <= Date.now();
+  const isExhausted = inv.use_count >= inv.max_uses;
+  const effectiveStatus =
+    inv.status === 'pending' && isExpired
+      ? 'expired'
+      : inv.status === 'pending' && isExhausted
+      ? 'accepted'
+      : inv.status;
+  const valid = inv.status === 'pending' && !isExpired && !isExhausted;
+
+  let reason = '';
+  if (!valid) {
+    if (effectiveStatus === 'expired') reason = 'This invitation link has expired. Ask a group member for a new invite.';
+    else if (effectiveStatus === 'revoked') reason = 'This invitation has been revoked by a group admin.';
+    else if (effectiveStatus === 'declined') reason = 'This invitation was already declined.';
+    else reason = 'This invitation has already been used.';
+  }
+
+  res.json({
+    valid,
+    status: effectiveStatus,
+    reason,
+    channel: inv.channel,
+    requiresEmailMatch: Boolean(inv.invitee_email),
+    groupId: inv.group_id,
+    groupName: inv.group_name,
+    groupCategory: inv.group_category,
+    inviterName: inv.inviter_name,
+    expiresAt: inv.expires_at,
+  });
+});
+
+groupsRouter.post('/invite/:token/accept', requireAuth, (req: AuthedRequest, res) => {
+  const token = (req.params.token ?? '').trim();
+  const userId = req.user!.id;
+
+  const inv = db
+    .prepare(`
+      SELECT i.*, g.name AS group_name
+      FROM invitations i
+      JOIN groups g ON g.id = i.group_id
+      WHERE i.token = ?
+    `)
+    .get(token) as
+    | {
+        id: number;
+        group_id: number;
+        invited_by: number;
+        invitee_email: string | null;
+        invitee_phone: string | null;
+        channel: string;
+        status: string;
+        max_uses: number;
+        use_count: number;
+        expires_at: string;
+        group_name: string;
+      }
+    | undefined;
+
+  if (!inv) {
+    res.status(404).json({ error: 'Invitation not found.' });
+    return;
+  }
+
+  if (inv.status === 'revoked') {
+    res.status(400).json({ error: 'This invitation has been revoked by a group admin.' });
+    return;
+  }
+  if (inv.status === 'declined') {
+    res.status(400).json({ error: 'This invitation was declined and can no longer be accepted.' });
+    return;
+  }
+  if (inv.status === 'accepted' || inv.use_count >= inv.max_uses) {
+    res.status(400).json({ error: 'This invitation has already been accepted or reached its usage limit.' });
+    return;
+  }
+  if (parseSqliteUtcMs(inv.expires_at) <= Date.now()) {
+    db.prepare("UPDATE invitations SET status = 'expired' WHERE id = ? AND status = 'pending'").run(inv.id);
+    res.status(400).json({ error: 'This invitation link has expired.' });
+    return;
+  }
+
+  if (inv.invitee_email && inv.invitee_email.toLowerCase() !== req.user!.email.toLowerCase()) {
+    res.status(403).json({
+      error: `This email invitation was issued for a different email address than your signed-in account (${req.user!.email}). Please sign in with the invited email or ask for a shareable QR/WhatsApp link.`,
+    });
+    return;
+  }
+
+  const existing = getMembership(inv.group_id, userId);
+  if (existing) {
+    res.json({ groupId: inv.group_id, groupName: inv.group_name, alreadyMember: true });
+    return;
+  }
+
+  db.transaction(() => {
+    db.prepare("INSERT INTO group_members (group_id, user_id, role) VALUES (?, ?, 'member')").run(
+      inv.group_id,
+      userId
+    );
+    const nextUses = inv.use_count + 1;
+    const markAccepted = nextUses >= inv.max_uses;
+    db.prepare(`
+      UPDATE invitations
+      SET use_count = ?,
+          status = CASE WHEN ? THEN 'accepted' ELSE status END,
+          accepted_by_user_id = ?,
+          accepted_at = datetime('now')
+      WHERE id = ?
+    `).run(nextUses, markAccepted ? 1 : 0, userId, inv.id);
+
+    db.prepare(`
+      INSERT INTO activity_logs (group_id, user_id, action, entity_type, entity_id, summary)
+      VALUES (?, ?, 'member_joined', 'group', ?, ?)
+    `).run(
+      inv.group_id,
+      userId,
+      inv.group_id,
+      `${req.user!.fullName} joined the group via ${inv.channel} invitation`
+    );
+
+    if (inv.invited_by !== userId) {
+      db.prepare(`
+        INSERT INTO notifications (user_id, group_id, type, title, message, link_path)
+        VALUES (?, ?, 'invite_accepted', 'Invitation accepted', ?, '/groups')
+      `).run(inv.invited_by, inv.group_id, `${req.user!.fullName} accepted your invitation to join "${inv.group_name}".`);
+    }
+  })();
+
+  res.json({ groupId: inv.group_id, groupName: inv.group_name, alreadyMember: false });
+});
+
+groupsRouter.post('/invite/:token/decline', (req, res) => {
+  const token = (req.params.token ?? '').trim();
+  const inv = db.prepare('SELECT id, max_uses, status FROM invitations WHERE token = ?').get(token) as
+    | { id: number; max_uses: number; status: string }
+    | undefined;
+
+  if (!inv) {
+    res.status(404).json({ error: 'Invitation not found.' });
+    return;
+  }
+
+  // Only permanently mark single-use personal invites declined; multi-use group QR links stay usable by other invitees
+  if (inv.max_uses === 1 && inv.status === 'pending') {
+    db.prepare("UPDATE invitations SET status = 'declined', declined_at = datetime('now') WHERE id = ?").run(inv.id);
+  }
+
+  res.json({ ok: true });
 });
 
 groupsRouter.get('/:id', requireAuth, async (req: AuthedRequest, res) => {
@@ -209,31 +497,53 @@ groupsRouter.get('/:id', requireAuth, async (req: AuthedRequest, res) => {
     creator_name: string;
   }>;
 
-  const invitations = db
+  const rawInvitations = db
     .prepare(`
-      SELECT id, invitee_email, token, status, max_uses, use_count, expires_at, created_at
+      SELECT id, invitee_email, invitee_phone, channel, token, status, delivery_status,
+             delivery_error, max_uses, use_count, expires_at, created_at, last_sent_at
       FROM invitations
       WHERE group_id = ?
-      ORDER BY created_at DESC
+      ORDER BY created_at DESC, id DESC
     `)
     .all(groupId) as Array<{
     id: number;
     invitee_email: string | null;
+    invitee_phone: string | null;
+    channel: string;
     token: string;
     status: string;
+    delivery_status: string;
+    delivery_error: string | null;
     max_uses: number;
     use_count: number;
     expires_at: string;
     created_at: string;
+    last_sent_at: string | null;
   }>;
 
-  const baseUrl = `${req.protocol}://${req.get('host')}`;
-  const activeInvite = invitations.find(
-    (inv) => inv.status === 'pending' && !inv.invitee_email && new Date(inv.expires_at).getTime() > Date.now()
+  const nowMs = Date.now();
+  const baseUrl = getPublicAppBaseUrl(req);
+  const invitations = rawInvitations.map((inv) => {
+    const expired = inv.status === 'pending' && parseSqliteUtcMs(inv.expires_at) <= nowMs;
+    const effectiveStatus = expired ? 'expired' : inv.status;
+    return {
+      ...inv,
+      status: effectiveStatus,
+      inviteUrl: `${baseUrl}/?invite=${inv.token}`,
+    };
+  });
+
+  const activeQrInvite = invitations.find(
+    (inv) =>
+      inv.status === 'pending' &&
+      !inv.invitee_email &&
+      !inv.invitee_phone &&
+      inv.use_count < inv.max_uses
   );
-  const inviteQrDataUrl = activeInvite
-    ? await QRCode.toDataURL(`${baseUrl}/?invite=${activeInvite.token}`, {
-        width: 240,
+
+  const inviteQrDataUrl = activeQrInvite
+    ? await QRCode.toDataURL(activeQrInvite.inviteUrl, {
+        width: 260,
         margin: 1,
         color: { dark: '#0F172A', light: '#FFFFFF' },
       })
@@ -283,6 +593,9 @@ groupsRouter.get('/:id', requireAuth, async (req: AuthedRequest, res) => {
     expenses,
     invitations,
     inviteQrDataUrl,
+    activeInviteUrl: activeQrInvite?.inviteUrl ?? null,
+    smtpConfigured: isSmtpConfigured(),
+    smsConfigured: isSmsConfigured(),
     activities,
     settlements,
   });
@@ -359,7 +672,7 @@ groupsRouter.delete('/:id', requireAuth, (req: AuthedRequest, res) => {
   res.json({ ok: true });
 });
 
-groupsRouter.post('/:id/members', requireAuth, (req: AuthedRequest, res) => {
+groupsRouter.post('/:id/members', requireAuth, async (req: AuthedRequest, res) => {
   const groupId = Number(req.params.id);
   const membership = getMembership(groupId, req.user!.id);
   if (!membership) {
@@ -374,8 +687,15 @@ groupsRouter.post('/:id/members', requireAuth, (req: AuthedRequest, res) => {
     return;
   }
 
-  const group = db.prepare('SELECT name FROM groups WHERE id = ?').get(groupId) as { name: string };
-  const targetUser = db.prepare('SELECT id, full_name FROM users WHERE email = ?').get(cleanEmail) as
+  const group = db.prepare('SELECT name, description FROM groups WHERE id = ?').get(groupId) as
+    | { name: string; description: string }
+    | undefined;
+  if (!group) {
+    res.status(404).json({ error: 'Group not found.' });
+    return;
+  }
+
+  const targetUser = db.prepare('SELECT id, full_name FROM users WHERE lower(email) = ?').get(cleanEmail) as
     | { id: number; full_name: string }
     | undefined;
 
@@ -393,13 +713,8 @@ groupsRouter.post('/:id/members', requireAuth, (req: AuthedRequest, res) => {
       );
       db.prepare(`
         INSERT INTO notifications (user_id, group_id, type, title, message, link_path)
-        VALUES (?, ?, 'group_joined', 'Added to group', ?, ?)
-      `).run(
-        targetUser.id,
-        groupId,
-        `${req.user!.fullName} added you to "${group.name}".`,
-        `/groups/${groupId}`
-      );
+        VALUES (?, ?, 'group_joined', 'Added to group', ?, '/groups')
+      `).run(targetUser.id, groupId, `${req.user!.fullName} added you to "${group.name}".`);
       db.prepare(`
         INSERT INTO activity_logs (group_id, user_id, action, entity_type, entity_id, summary)
         VALUES (?, ?, 'member_added', 'user', ?, ?)
@@ -410,13 +725,55 @@ groupsRouter.post('/:id/members', requireAuth, (req: AuthedRequest, res) => {
     return;
   }
 
-  const token = generateOpaqueToken(16);
-  db.prepare(`
-    INSERT INTO invitations (group_id, invited_by, invitee_email, token, expires_at)
-    VALUES (?, ?, ?, ?, datetime('now', '+14 days'))
-  `).run(groupId, req.user!.id, cleanEmail, token);
+  const duplicate = db
+    .prepare(`
+      SELECT id FROM invitations
+      WHERE group_id = ? AND lower(COALESCE(invitee_email, '')) = ?
+        AND status = 'pending' AND datetime(expires_at) > datetime('now')
+    `)
+    .get(groupId, cleanEmail);
 
-  res.status(201).json({ status: 'invited', token });
+  if (duplicate) {
+    res.status(409).json({ error: `An active pending invitation already exists for ${cleanEmail}. You can resend or revoke it below.` });
+    return;
+  }
+
+  const token = generateOpaqueToken(16);
+  const inviteId = Number(
+    db
+      .prepare(`
+        INSERT INTO invitations (group_id, invited_by, invitee_email, channel, token, delivery_status, max_uses, expires_at)
+        VALUES (?, ?, ?, 'email', ?, 'pending', 1, datetime('now', '+14 days'))
+      `)
+      .run(groupId, req.user!.id, cleanEmail, token).lastInsertRowid
+  );
+
+  const baseUrl = getPublicAppBaseUrl(req);
+  const inviteUrl = `${baseUrl}/?invite=${token}`;
+  const emailResult = await sendGroupInvitationEmail({
+    toEmail: cleanEmail,
+    groupName: group.name,
+    groupDescription: group.description,
+    inviterName: req.user!.fullName,
+    inviteUrl,
+    expiresInDays: 14,
+  });
+
+  db.prepare(`
+    UPDATE invitations
+    SET delivery_status = ?, delivery_error = ?, last_sent_at = CASE WHEN ? = 'sent' THEN datetime('now') ELSE NULL END
+    WHERE id = ?
+  `).run(emailResult.deliveryStatus, emailResult.errorMessage ?? null, emailResult.deliveryStatus, inviteId);
+
+  res.status(201).json({
+    status: 'invited',
+    invitationId: inviteId,
+    inviteUrl,
+    emailDelivered: emailResult.delivered,
+    deliveryStatus: emailResult.deliveryStatus,
+    deliveryError: emailResult.errorMessage ?? null,
+    smtpConfigured: isSmtpConfigured(),
+  });
 });
 
 groupsRouter.patch('/:id/members/:memberId/role', requireAuth, (req: AuthedRequest, res) => {
@@ -496,24 +853,373 @@ groupsRouter.post('/:id/invitations', requireAuth, async (req: AuthedRequest, re
     return;
   }
 
-  const { inviteeEmail, expiresInDays } = req.body as { inviteeEmail?: string; expiresInDays?: number };
-  const days = Math.min(90, Math.max(1, Number(expiresInDays ?? 14)));
+  const group = db.prepare('SELECT name, description FROM groups WHERE id = ?').get(groupId) as
+    | { name: string; description: string }
+    | undefined;
+  if (!group) {
+    res.status(404).json({ error: 'Group not found.' });
+    return;
+  }
+
+  const { channel = 'qr', inviteeEmail, inviteePhone, deliveryMode = 'whatsapp', reuseExisting = false, expiresInDays } = req.body as {
+    channel?: 'qr' | 'email' | 'whatsapp' | 'phone' | 'link';
+    inviteeEmail?: string;
+    inviteePhone?: string;
+    deliveryMode?: 'whatsapp' | 'sms';
+    reuseExisting?: boolean;
+    expiresInDays?: number;
+  };
+
+  const validChannels = ['qr', 'email', 'whatsapp', 'phone', 'link'] as const;
+  const cleanChannel = validChannels.includes(channel) ? channel : 'qr';
+  const days = Math.min(90, Math.max(1, Number(expiresInDays ?? 14) || 14));
+  const baseUrl = getPublicAppBaseUrl(req);
+
+  if (cleanChannel === 'email') {
+    const cleanEmail = (inviteeEmail ?? '').trim().toLowerCase();
+    if (!isValidEmail(cleanEmail)) {
+      res.status(400).json({ error: 'Please enter a valid email address.' });
+      return;
+    }
+
+    const existingUser = db.prepare('SELECT id, full_name FROM users WHERE lower(email) = ?').get(cleanEmail) as
+      | { id: number; full_name: string }
+      | undefined;
+    if (existingUser && getMembership(groupId, existingUser.id)) {
+      res.status(409).json({ error: `${existingUser.full_name} is already a member of this group.` });
+      return;
+    }
+
+    const duplicate = db
+      .prepare(`
+        SELECT id FROM invitations
+        WHERE group_id = ? AND lower(COALESCE(invitee_email, '')) = ?
+          AND status = 'pending' AND datetime(expires_at) > datetime('now')
+      `)
+      .get(groupId, cleanEmail);
+
+    if (duplicate) {
+      res.status(409).json({
+        error: `An active pending invitation already exists for ${cleanEmail}. Use Resend or Revoke in the list below.`,
+      });
+      return;
+    }
+
+    const token = generateOpaqueToken(16);
+    const inviteId = Number(
+      db
+        .prepare(`
+          INSERT INTO invitations (group_id, invited_by, invitee_email, channel, token, delivery_status, max_uses, expires_at)
+          VALUES (?, ?, ?, 'email', ?, 'pending', 1, datetime('now', '+' || ? || ' days'))
+        `)
+        .run(groupId, req.user!.id, cleanEmail, token, days).lastInsertRowid
+    );
+
+    const inviteUrl = `${baseUrl}/?invite=${token}`;
+    const emailResult = await sendGroupInvitationEmail({
+      toEmail: cleanEmail,
+      groupName: group.name,
+      groupDescription: group.description,
+      inviterName: req.user!.fullName,
+      inviteUrl,
+      expiresInDays: days,
+    });
+
+    db.prepare(`
+      UPDATE invitations
+      SET delivery_status = ?, delivery_error = ?, last_sent_at = CASE WHEN ? = 'sent' THEN datetime('now') ELSE NULL END
+      WHERE id = ?
+    `).run(emailResult.deliveryStatus, emailResult.errorMessage ?? null, emailResult.deliveryStatus, inviteId);
+
+    if (existingUser) {
+      db.prepare(`
+        INSERT INTO notifications (user_id, group_id, type, title, message, link_path)
+        VALUES (?, ?, 'group_invite', 'Group invitation received', ?, ?)
+      `).run(
+        existingUser.id,
+        groupId,
+        `${req.user!.fullName} invited you to join "${group.name}". Would you like to join?`,
+        `/?invite=${token}`
+      );
+    }
+
+    const qrDataUrl = await QRCode.toDataURL(inviteUrl, {
+      width: 260,
+      margin: 1,
+      color: { dark: '#0F172A', light: '#FFFFFF' },
+    });
+
+    res.status(201).json({
+      invitationId: inviteId,
+      channel: 'email',
+      inviteUrl,
+      qrDataUrl,
+      whatsappShareUrl: buildWhatsAppShareUrl(group.name, inviteUrl),
+      emailDelivered: emailResult.delivered,
+      deliveryStatus: emailResult.deliveryStatus,
+      deliveryError: emailResult.errorMessage ?? null,
+      smtpConfigured: isSmtpConfigured(),
+    });
+    return;
+  }
+
+  if (cleanChannel === 'phone') {
+    const rawPhone = (inviteePhone ?? '').trim();
+    const cleanPhone = normalizePhone(rawPhone);
+    if (!cleanPhone) {
+      res.status(400).json({ error: 'Enter a valid mobile number with country code (e.g., +91 9876543210).' });
+      return;
+    }
+
+    const matchedUser = db.prepare('SELECT id, full_name FROM users WHERE phone = ?').get(cleanPhone) as
+      | { id: number; full_name: string }
+      | undefined;
+
+    if (matchedUser && getMembership(groupId, matchedUser.id)) {
+      res.status(409).json({ error: 'A member with this mobile number is already in the group.' });
+      return;
+    }
+
+    const duplicate = db
+      .prepare(`
+        SELECT id FROM invitations
+        WHERE group_id = ? AND invitee_phone = ?
+          AND status = 'pending' AND datetime(expires_at) > datetime('now')
+      `)
+      .get(groupId, cleanPhone);
+
+    if (duplicate) {
+      res.status(409).json({ error: 'An active pending invitation already exists for this phone number.' });
+      return;
+    }
+
+    const token = generateOpaqueToken(16);
+    const inviteId = Number(
+      db
+        .prepare(`
+          INSERT INTO invitations (group_id, invited_by, invitee_phone, channel, token, delivery_status, max_uses, expires_at)
+          VALUES (?, ?, ?, 'phone', ?, 'pending', 1, datetime('now', '+' || ? || ' days'))
+        `)
+        .run(groupId, req.user!.id, cleanPhone, token, days).lastInsertRowid
+    );
+
+    const inviteUrl = `${baseUrl}/?invite=${token}`;
+
+    let smsDelivered = false;
+    let deliveryStatus: 'sent' | 'not_configured' | 'failed' | 'manual_share' = 'manual_share';
+    let deliveryError: string | null = null;
+
+    if (deliveryMode === 'sms') {
+      const smsRes = await sendGroupInvitationSms({
+        toPhone: cleanPhone,
+        groupName: group.name,
+        inviterName: req.user!.fullName,
+        inviteUrl,
+      });
+      smsDelivered = smsRes.delivered;
+      deliveryStatus = smsRes.deliveryStatus;
+      deliveryError = smsRes.errorMessage ?? null;
+    }
+
+    db.prepare(`
+      UPDATE invitations
+      SET delivery_status = ?, delivery_error = ?, last_sent_at = CASE WHEN ? = 'sent' THEN datetime('now') ELSE NULL END
+      WHERE id = ?
+    `).run(deliveryStatus, deliveryError, deliveryStatus, inviteId);
+
+    if (matchedUser) {
+      db.prepare(`
+        INSERT INTO notifications (user_id, group_id, type, title, message, link_path)
+        VALUES (?, ?, 'group_invite', 'Group invitation received', ?, ?)
+      `).run(
+        matchedUser.id,
+        groupId,
+        `${req.user!.fullName} invited you to join "${group.name}". Would you like to join?`,
+        `/?invite=${token}`
+      );
+    }
+
+    const qrDataUrl = await QRCode.toDataURL(inviteUrl, {
+      width: 260,
+      margin: 1,
+      color: { dark: '#0F172A', light: '#FFFFFF' },
+    });
+
+    res.status(201).json({
+      invitationId: inviteId,
+      channel: 'phone',
+      deliveryMode,
+      inviteUrl,
+      qrDataUrl,
+      whatsappShareUrl: buildWhatsAppShareUrl(group.name, inviteUrl, cleanPhone),
+      smsShareUrl: buildSmsShareUrl(group.name, req.user!.fullName, inviteUrl, cleanPhone),
+      hasExistingAccount: Boolean(matchedUser),
+      smsSent: smsDelivered,
+      smsConfigured: isSmsConfigured(),
+      deliveryStatus,
+      deliveryError,
+    });
+    return;
+  }
+
+  // QR, WhatsApp, or shareable Link invitation
+  if (reuseExisting) {
+    const existingActive = db
+      .prepare(`
+        SELECT id, token, channel
+        FROM invitations
+        WHERE group_id = ?
+          AND invitee_email IS NULL
+          AND invitee_phone IS NULL
+          AND status = 'pending'
+          AND use_count < max_uses
+          AND datetime(expires_at) > datetime('now')
+        ORDER BY id DESC
+        LIMIT 1
+      `)
+      .get(groupId) as { id: number; token: string; channel: string } | undefined;
+
+    if (existingActive) {
+      const inviteUrl = `${baseUrl}/?invite=${existingActive.token}`;
+      const qrDataUrl = await QRCode.toDataURL(inviteUrl, {
+        width: 260,
+        margin: 1,
+        color: { dark: '#0F172A', light: '#FFFFFF' },
+      });
+      res.status(200).json({
+        invitationId: existingActive.id,
+        channel: existingActive.channel,
+        inviteUrl,
+        qrDataUrl,
+        whatsappShareUrl: buildWhatsAppShareUrl(group.name, inviteUrl),
+        deliveryStatus: 'manual_share',
+      });
+      return;
+    }
+  }
+
   const token = generateOpaqueToken(16);
+  const maxUses = cleanChannel === 'qr' || cleanChannel === 'link' ? 25 : 15;
+  const inviteId = Number(
+    db
+      .prepare(`
+        INSERT INTO invitations (group_id, invited_by, channel, token, delivery_status, max_uses, expires_at)
+        VALUES (?, ?, ?, ?, 'manual_share', ?, datetime('now', '+' || ? || ' days'))
+      `)
+      .run(groupId, req.user!.id, cleanChannel, token, maxUses, days).lastInsertRowid
+  );
 
-  db.prepare(`
-    INSERT INTO invitations (group_id, invited_by, invitee_email, token, expires_at)
-    VALUES (?, ?, ?, ?, datetime('now', '+' || ? || ' days'))
-  `).run(groupId, req.user!.id, inviteeEmail?.trim().toLowerCase() || null, token, days);
-
-  const baseUrl = `${req.protocol}://${req.get('host')}`;
   const inviteUrl = `${baseUrl}/?invite=${token}`;
   const qrDataUrl = await QRCode.toDataURL(inviteUrl, {
-    width: 240,
+    width: 260,
     margin: 1,
     color: { dark: '#0F172A', light: '#FFFFFF' },
   });
 
-  res.status(201).json({ token, inviteUrl, qrDataUrl });
+  res.status(201).json({
+    invitationId: inviteId,
+    channel: cleanChannel,
+    inviteUrl,
+    qrDataUrl,
+    whatsappShareUrl: buildWhatsAppShareUrl(group.name, inviteUrl),
+    deliveryStatus: 'manual_share',
+  });
+});
+
+groupsRouter.post('/:id/invitations/:inviteId/resend', requireAuth, async (req: AuthedRequest, res) => {
+  const groupId = Number(req.params.id);
+  const inviteId = Number(req.params.inviteId);
+  const membership = getMembership(groupId, req.user!.id);
+  if (!membership) {
+    res.status(403).json({ error: 'Only group members can resend invitations.' });
+    return;
+  }
+
+  const inv = db
+    .prepare(`
+      SELECT i.*, g.name AS group_name, g.description AS group_description
+      FROM invitations i
+      JOIN groups g ON g.id = i.group_id
+      WHERE i.id = ? AND i.group_id = ?
+    `)
+    .get(inviteId, groupId) as
+    | {
+        id: number;
+        invitee_email: string | null;
+        invitee_phone: string | null;
+        token: string;
+        status: string;
+        expires_at: string;
+        group_name: string;
+        group_description: string;
+      }
+    | undefined;
+
+  if (!inv) {
+    res.status(404).json({ error: 'Invitation not found.' });
+    return;
+  }
+  if (inv.status !== 'pending' || parseSqliteUtcMs(inv.expires_at) <= Date.now()) {
+    res.status(400).json({ error: 'Only active pending invitations can be resent.' });
+    return;
+  }
+
+  const baseUrl = getPublicAppBaseUrl(req);
+  const inviteUrl = `${baseUrl}/?invite=${inv.token}`;
+
+  if (inv.invitee_email) {
+    const emailResult = await sendGroupInvitationEmail({
+      toEmail: inv.invitee_email,
+      groupName: inv.group_name,
+      groupDescription: inv.group_description,
+      inviterName: req.user!.fullName,
+      inviteUrl,
+      expiresInDays: 14,
+    });
+
+    db.prepare(`
+      UPDATE invitations
+      SET delivery_status = ?, delivery_error = ?, last_sent_at = CASE WHEN ? = 'sent' THEN datetime('now') ELSE last_sent_at END
+      WHERE id = ?
+    `).run(emailResult.deliveryStatus, emailResult.errorMessage ?? null, emailResult.deliveryStatus, inv.id);
+
+    res.json({
+      emailDelivered: emailResult.delivered,
+      deliveryStatus: emailResult.deliveryStatus,
+      deliveryError: emailResult.errorMessage ?? null,
+      inviteUrl,
+      smtpConfigured: isSmtpConfigured(),
+    });
+    return;
+  }
+
+  if (inv.invitee_phone) {
+    const smsResult = await sendGroupInvitationSms({
+      toPhone: inv.invitee_phone,
+      groupName: inv.group_name,
+      inviterName: req.user!.fullName,
+      inviteUrl,
+    });
+
+    db.prepare(`
+      UPDATE invitations
+      SET delivery_status = ?, delivery_error = ?, last_sent_at = CASE WHEN ? = 'sent' THEN datetime('now') ELSE last_sent_at END
+      WHERE id = ?
+    `).run(smsResult.deliveryStatus, smsResult.errorMessage ?? null, smsResult.deliveryStatus, inv.id);
+
+    res.json({
+      smsDelivered: smsResult.delivered,
+      deliveryStatus: smsResult.deliveryStatus,
+      deliveryError: smsResult.errorMessage ?? null,
+      inviteUrl,
+      whatsappShareUrl: buildWhatsAppShareUrl(inv.group_name, inviteUrl, inv.invitee_phone),
+      smsShareUrl: buildSmsShareUrl(inv.group_name, req.user!.fullName, inviteUrl, inv.invitee_phone),
+      smsConfigured: isSmsConfigured(),
+    });
+    return;
+  }
+
+  res.status(400).json({ error: 'Copy or share the invite link directly for link/QR invitations.' });
 });
 
 groupsRouter.post('/:id/invitations/:inviteId/revoke', requireAuth, (req: AuthedRequest, res) => {
@@ -530,89 +1236,4 @@ groupsRouter.post('/:id/invitations/:inviteId/revoke', requireAuth, (req: Authed
     groupId
   );
   res.json({ ok: true });
-});
-
-groupsRouter.get('/invite/:token', (req, res) => {
-  const token = req.params.token;
-  const inv = db
-    .prepare(`
-      SELECT i.*, g.name AS group_name, g.description AS group_description, g.category AS group_category,
-             u.full_name AS inviter_name
-      FROM invitations i
-      JOIN groups g ON g.id = i.group_id
-      JOIN users u ON u.id = i.invited_by
-      WHERE i.token = ?
-    `)
-    .get(token) as
-    | {
-        id: number;
-        group_id: number;
-        status: string;
-        max_uses: number;
-        use_count: number;
-        expires_at: string;
-        group_name: string;
-        group_description: string;
-        group_category: string;
-        inviter_name: string;
-      }
-    | undefined;
-
-  if (!inv) {
-    res.status(404).json({ error: 'Invitation not found.' });
-    return;
-  }
-
-  const isExpired = new Date(inv.expires_at).getTime() <= Date.now();
-  const isExhausted = inv.use_count >= inv.max_uses;
-  const valid = inv.status === 'pending' && !isExpired && !isExhausted;
-
-  res.json({
-    valid,
-    status: isExpired ? 'expired' : inv.status,
-    groupId: inv.group_id,
-    groupName: inv.group_name,
-    groupDescription: inv.group_description,
-    groupCategory: inv.group_category,
-    inviterName: inv.inviter_name,
-    expiresAt: inv.expires_at,
-  });
-});
-
-groupsRouter.post('/invite/:token/accept', requireAuth, (req: AuthedRequest, res) => {
-  const token = req.params.token;
-  const userId = req.user!.id;
-
-  const inv = db.prepare('SELECT * FROM invitations WHERE token = ?').get(token) as
-    | {
-        id: number;
-        group_id: number;
-        status: string;
-        max_uses: number;
-        use_count: number;
-        expires_at: string;
-      }
-    | undefined;
-
-  if (!inv || inv.status !== 'pending' || new Date(inv.expires_at).getTime() <= Date.now() || inv.use_count >= inv.max_uses) {
-    res.status(400).json({ error: 'This invitation link is invalid, revoked, or expired.' });
-    return;
-  }
-
-  db.transaction(() => {
-    const existing = getMembership(inv.group_id, userId);
-    if (!existing) {
-      db.prepare("INSERT INTO group_members (group_id, user_id, role) VALUES (?, ?, 'member')").run(
-        inv.group_id,
-        userId
-      );
-      db.prepare('UPDATE invitations SET use_count = use_count + 1 WHERE id = ?').run(inv.id);
-      db.prepare(`
-        INSERT INTO activity_logs (group_id, user_id, action, entity_type, entity_id, summary)
-        VALUES (?, ?, 'member_joined', 'group', ?, ?)
-      `).run(inv.group_id, userId, inv.group_id, `${req.user!.fullName} joined the group via invitation`);
-    }
-  })();
-
-  res.json({ groupId: inv.group_id });
 });

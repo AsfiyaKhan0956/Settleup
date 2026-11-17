@@ -78,7 +78,7 @@ export const ForgotPasswordPage: React.FC<{ onNavigate: (route: AppRoute) => voi
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
+                placeholder="Enter your email address"
                 required
                 className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg bg-white focus:border-[#065F46] focus:outline-none"
               />
@@ -121,7 +121,7 @@ export const ForgotPasswordPage: React.FC<{ onNavigate: (route: AppRoute) => voi
                 type="password"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="8+ chars, uppercase, lowercase, number"
+                placeholder="Create a new password"
                 required
                 className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg"
               />

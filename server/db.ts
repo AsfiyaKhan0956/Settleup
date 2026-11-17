@@ -205,9 +205,289 @@ export function initializeDatabase(): void {
     CREATE INDEX IF NOT EXISTS idx_settlements_group_status ON settlements(group_id, status);
     CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, is_read);
     CREATE INDEX IF NOT EXISTS idx_activity_group ON activity_logs(group_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS personal_categories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'expense' CHECK (type IN ('income', 'expense')),
+      color TEXT NOT NULL DEFAULT '#065F46',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (user_id, name, type),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS personal_transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
+      type TEXT NOT NULL CHECK (type IN ('income', 'expense')),
+      category TEXT NOT NULL,
+      transaction_date TEXT NOT NULL,
+      notes TEXT DEFAULT '',
+      payment_method TEXT DEFAULT '',
+      linked_group_expense_id INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (linked_group_expense_id) REFERENCES expenses(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS personal_budgets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      scope TEXT NOT NULL CHECK (scope IN ('overall', 'category')),
+      category TEXT NOT NULL DEFAULT '',
+      period TEXT NOT NULL CHECK (period IN ('weekly', 'monthly')),
+      limit_paise INTEGER NOT NULL CHECK (limit_paise > 0),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (user_id, scope, category, period),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS personal_savings_goals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      target_paise INTEGER NOT NULL CHECK (target_paise > 0),
+      current_saved_paise INTEGER NOT NULL DEFAULT 0 CHECK (current_saved_paise >= 0),
+      target_date TEXT,
+      notes TEXT DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS trip_ledgers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      group_id INTEGER,
+      title TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      event_date TEXT NOT NULL DEFAULT (date('now')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS external_participants (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      trip_ledger_id INTEGER,
+      display_name TEXT NOT NULL,
+      phone TEXT,
+      email TEXT,
+      linked_user_id INTEGER,
+      notes TEXT DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (trip_ledger_id) REFERENCES trip_ledgers(id) ON DELETE CASCADE,
+      FOREIGN KEY (linked_user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS manual_balances (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      trip_ledger_id INTEGER,
+      external_participant_id INTEGER,
+      linked_user_id INTEGER,
+      person_name TEXT NOT NULL,
+      contact_ref TEXT DEFAULT '',
+      participant_type TEXT NOT NULL DEFAULT 'external' CHECK (participant_type IN ('external', 'registered')),
+      direction TEXT NOT NULL CHECK (direction IN ('to_pay', 'to_receive')),
+      amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
+      settled_paise INTEGER NOT NULL DEFAULT 0 CHECK (settled_paise >= 0),
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'partially_settled', 'settled')),
+      trip_name TEXT DEFAULT '',
+      description TEXT DEFAULT '',
+      entry_date TEXT NOT NULL DEFAULT (date('now')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (trip_ledger_id) REFERENCES trip_ledgers(id) ON DELETE CASCADE,
+      FOREIGN KEY (external_participant_id) REFERENCES external_participants(id) ON DELETE SET NULL,
+      FOREIGN KEY (linked_user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS manual_balance_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      manual_balance_id INTEGER,
+      trip_ledger_id INTEGER,
+      action TEXT NOT NULL,
+      amount_paise INTEGER NOT NULL DEFAULT 0,
+      note TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (manual_balance_id) REFERENCES manual_balances(id) ON DELETE SET NULL,
+      FOREIGN KEY (trip_ledger_id) REFERENCES trip_ledgers(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_personal_tx_user_date ON personal_transactions(user_id, transaction_date);
+    CREATE INDEX IF NOT EXISTS idx_personal_tx_user_type ON personal_transactions(user_id, type);
+    CREATE INDEX IF NOT EXISTS idx_manual_balances_user_trip ON manual_balances(user_id, trip_ledger_id);
+    CREATE INDEX IF NOT EXISTS idx_external_participants_user ON external_participants(user_id, trip_ledger_id);
   `);
 
+  applyIncrementalMigrations();
   seedDemoWorkspaceIfNeeded();
+  seedDemoPersonalAndTripData();
+}
+
+function applyIncrementalMigrations(): void {
+  const userCols = db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>;
+  if (!userCols.some((c) => c.name === 'phone')) {
+    db.exec(`ALTER TABLE users ADD COLUMN phone TEXT;`);
+  }
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone ON users(phone) WHERE phone IS NOT NULL;`);
+
+  const invMaster = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'invitations'")
+    .get() as { sql: string } | undefined;
+  const invCols = db.prepare('PRAGMA table_info(invitations)').all() as Array<{ name: string }>;
+  const needsInvUpgrade =
+    !invCols.some((c) => c.name === 'delivery_status') ||
+    !invCols.some((c) => c.name === 'invitee_phone') ||
+    !(invMaster?.sql || '').includes("'declined'");
+
+  if (needsInvUpgrade) {
+    db.pragma('foreign_keys = OFF');
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE invitations_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          group_id INTEGER NOT NULL,
+          invited_by INTEGER NOT NULL,
+          invitee_email TEXT,
+          invitee_phone TEXT,
+          channel TEXT NOT NULL DEFAULT 'link' CHECK (channel IN ('qr', 'email', 'whatsapp', 'phone', 'link')),
+          token TEXT NOT NULL UNIQUE,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'declined', 'revoked', 'expired')),
+          delivery_status TEXT NOT NULL DEFAULT 'pending' CHECK (delivery_status IN ('pending', 'sent', 'not_configured', 'failed', 'manual_share')),
+          delivery_error TEXT,
+          accepted_by_user_id INTEGER,
+          accepted_at TEXT,
+          declined_at TEXT,
+          last_sent_at TEXT,
+          max_uses INTEGER NOT NULL DEFAULT 10,
+          use_count INTEGER NOT NULL DEFAULT 0,
+          expires_at TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+          FOREIGN KEY (invited_by) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (accepted_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+        );
+
+        INSERT INTO invitations_new (
+          id, group_id, invited_by, invitee_email, channel, token, status, delivery_status, max_uses, use_count, expires_at, created_at
+        )
+        SELECT
+          id,
+          group_id,
+          invited_by,
+          invitee_email,
+          CASE WHEN invitee_email IS NOT NULL THEN 'email' ELSE 'qr' END,
+          token,
+          status,
+          CASE WHEN invitee_email IS NOT NULL THEN 'not_configured' ELSE 'manual_share' END,
+          max_uses,
+          use_count,
+          expires_at,
+          created_at
+        FROM invitations;
+
+        DROP TABLE invitations;
+        ALTER TABLE invitations_new RENAME TO invitations;
+        CREATE INDEX IF NOT EXISTS idx_invitations_group_status ON invitations(group_id, status);
+      `);
+    })();
+    db.pragma('foreign_keys = ON');
+  }
+}
+
+/**
+ * Seeds sample personal transactions & a large-trip manual ledger ONLY for the demo account (aarav@settleup.app)
+ * if none exist yet, so demo users can explore charts while newly registered users always start empty.
+ */
+function seedDemoPersonalAndTripData(): void {
+  const aarav = db.prepare('SELECT id FROM users WHERE email = ?').get('aarav@settleup.app') as
+    | { id: number }
+    | undefined;
+  if (!aarav) return;
+
+  const existingTx = db
+    .prepare('SELECT 1 FROM personal_transactions WHERE user_id = ? LIMIT 1')
+    .get(aarav.id);
+
+  if (!existingTx) {
+    db.transaction(() => {
+      const insertTx = db.prepare(`
+        INSERT INTO personal_transactions (user_id, title, amount_paise, type, category, transaction_date, notes, payment_method)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      insertTx.run(aarav.id, 'Monthly Stipend & Freelance', 2200000, 'income', 'Salary & stipend', dateOffset(0, -12), 'Monthly internship stipend', 'Bank Transfer');
+      insertTx.run(aarav.id, 'BESCOM Electricity Share', 150000, 'expense', 'Electricity and utilities', dateOffset(0, -9), 'Home power bill', 'UPI');
+      insertTx.run(aarav.id, 'Weekly Groceries & Milk', 200000, 'expense', 'Food and groceries', dateOffset(0, -6), 'Fresh vegetables & pantry', 'UPI');
+      insertTx.run(aarav.id, 'Metro & Bus Pass', 80000, 'expense', 'Transportation', dateOffset(0, -4), 'Monthly transit recharge', 'Debit Card');
+      insertTx.run(aarav.id, 'Bookstore & Lab Notebook', 120000, 'expense', 'Education', dateOffset(0, -2), 'Semester reference book', 'UPI');
+      insertTx.run(aarav.id, 'Weekend Movie & Dinner', 95000, 'expense', 'Entertainment', dateOffset(0, -1), 'Personal outing', 'UPI');
+      insertTx.run(aarav.id, 'Last Month Stipend', 1800000, 'income', 'Salary & stipend', dateOffset(0, -40), 'Previous month stipend', 'Bank Transfer');
+      insertTx.run(aarav.id, 'Hostel & Room Rent', 650000, 'expense', 'Rent and accommodation', dateOffset(0, -35), 'Monthly accommodation', 'Bank Transfer');
+
+      db.prepare(`
+        INSERT OR IGNORE INTO personal_budgets (user_id, scope, category, period, limit_paise)
+        VALUES (?, 'overall', '', 'monthly', 1400000)
+      `).run(aarav.id);
+
+      db.prepare(`
+        INSERT INTO personal_savings_goals (user_id, title, target_paise, current_saved_paise, target_date, notes)
+        VALUES (?, 'Emergency Laptop Fund', 4500000, 1555000, date('now', '+120 days'), 'Building steady semester savings')
+      `).run(aarav.id);
+    })();
+  }
+
+  const existingTrip = db.prepare('SELECT 1 FROM trip_ledgers WHERE user_id = ? LIMIT 1').get(aarav.id);
+  if (!existingTrip) {
+    db.transaction(() => {
+      const tripId = Number(
+        db
+          .prepare(`
+            INSERT INTO trip_ledgers (user_id, title, description, event_date)
+            VALUES (?, 'Coorg Industrial Visit Bus', 'External classmates who joined the trip without SettleUp accounts.', date('now', '-3 days'))
+          `)
+          .run(aarav.id).lastInsertRowid
+      );
+
+      const addExt = db.prepare(`
+        INSERT INTO external_participants (user_id, trip_ledger_id, display_name, phone, notes)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+      const bunnyExtId = Number(addExt.run(aarav.id, tripId, 'Bunny', '+919800000001', 'External classmate').lastInsertRowid);
+      const rahulExtId = Number(addExt.run(aarav.id, tripId, 'Rahul', '+919800000002', 'External classmate').lastInsertRowid);
+      const priyaExtId = Number(addExt.run(aarav.id, tripId, 'Priya', '+919800000003', 'Bus coordinator').lastInsertRowid);
+
+      const addBal = db.prepare(`
+        INSERT INTO manual_balances (
+          user_id, trip_ledger_id, external_participant_id, person_name, contact_ref,
+          participant_type, direction, amount_paise, settled_paise, status, trip_name, description, entry_date
+        ) VALUES (?, ?, ?, ?, ?, 'external', ?, ?, 0, 'pending', 'Coorg Industrial Visit Bus', ?, date('now', '-3 days'))
+      `);
+      addBal.run(aarav.id, tripId, bunnyExtId, 'Bunny', '+919800000001', 'to_pay', 50000, 'Bus seat & toll contribution');
+      addBal.run(aarav.id, tripId, rahulExtId, 'Rahul', '+919800000002', 'to_pay', 80000, 'Homestay deposit share');
+      addBal.run(aarav.id, tripId, priyaExtId, 'Priya', '+919800000003', 'to_receive', 100000, 'Paid driver advance upfront');
+      addBal.run(aarav.id, tripId, null, 'Aarav Sharma', 'aarav@settleup.app', 'to_receive', 30000, 'Paid highway snacks');
+    })();
+  }
+}
+
+function dateOffset(monthsDelta: number, daysDelta: number): string {
+  const d = new Date();
+  d.setMonth(d.getMonth() + monthsDelta);
+  d.setDate(d.getDate() + daysDelta);
+  return d.toISOString().slice(0, 10);
 }
 
 /**

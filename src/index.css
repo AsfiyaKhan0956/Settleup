@@ -58,6 +58,14 @@
 
 /* Print / PDF Summary Mode */
 @media print {
+  @page {
+    size: A4;
+    margin: 14mm;
+  }
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
   aside,
   header,
   .no-print {
@@ -67,10 +75,19 @@
     padding: 0 !important;
     margin: 0 !important;
     width: 100% !important;
+    max-width: 100% !important;
   }
   body {
     background: #ffffff !important;
     color: #000000 !important;
+  }
+  .print-break-before {
+    break-before: page;
+    page-break-before: always;
+  }
+  .print-avoid-break {
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
 }
 

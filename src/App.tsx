@@ -11,30 +11,65 @@ import { AppShell } from './components/layout/AppShell.tsx';
 import { DashboardView } from './components/dashboard/DashboardView.tsx';
 import { GroupsView } from './components/groups/GroupsView.tsx';
 import { GroupWorkspaceView } from './components/groups/GroupWorkspaceView.tsx';
+import { QrInviteScannerModal } from './components/groups/QrInviteScannerModal.tsx';
 import { AddExpenseView } from './components/expenses/AddExpenseView.tsx';
 import { ExpensesHistoryView } from './components/expenses/ExpensesHistoryView.tsx';
 import { BalancesView } from './components/balances/BalancesView.tsx';
+import { ManualTripBalancesView } from './components/balances/ManualTripBalancesView.tsx';
 import { SettlementsView, UpiQrPaymentModal, type ActivePayTarget } from './components/settlements/SettlementsView.tsx';
 import { AnalyticsView } from './components/analytics/AnalyticsView.tsx';
+import { PersonalTrackerView } from './components/personal/PersonalTrackerView.tsx';
 import { NotificationsView } from './components/notifications/NotificationsView.tsx';
 import { ProfileSettingsView } from './components/profile/ProfileSettingsView.tsx';
 import { OnboardingTour } from './components/onboarding/OnboardingTour.tsx';
 import { AiHelpAssistant } from './components/assistant/AiHelpAssistant.tsx';
 
 const PUBLIC_ROUTES: AppRoute[] = ['/', '/login', '/register', '/forgot-password', '/help', '/privacy', '/terms', '/403', '/404', '/expired'];
+const PENDING_INVITE_KEY = 'settleup_pending_invite';
 
 interface InvitePreview {
   token: string;
   valid: boolean;
-  groupId: number;
-  groupName: string;
-  groupDescription: string;
-  inviterName: string;
+  status?: string;
+  reason?: string;
+  requiresEmailMatch?: boolean;
+  groupId?: number;
+  groupName?: string;
+  groupCategory?: string;
+  inviterName?: string;
+}
+
+function extractInitialInviteToken(): string | null {
+  const params = new URLSearchParams(window.location.search);
+  const queryToken = params.get('invite')?.trim();
+  if (queryToken) return queryToken;
+  const pathMatch = window.location.pathname.match(/^\/invite\/([a-zA-Z0-9_-]{8,128})\/?$/);
+  return pathMatch ? pathMatch[1] : null;
+}
+
+function savePendingInviteToken(token: string | null) {
+  try {
+    if (token) window.sessionStorage.setItem(PENDING_INVITE_KEY, token);
+    else window.sessionStorage.removeItem(PENDING_INVITE_KEY);
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+function readPendingInviteToken(): string | null {
+  try {
+    return window.sessionStorage.getItem(PENDING_INVITE_KEY);
+  } catch {
+    return null;
+  }
 }
 
 export default function App() {
   const [route, setRoute] = useState<AppRoute>(() => {
     const path = window.location.pathname as AppRoute;
+    if (/^\/invite\/[a-zA-Z0-9_-]{8,128}\/?$/.test(window.location.pathname)) {
+      return '/';
+    }
     const known: AppRoute[] = [
       '/',
       '/login',
@@ -46,11 +81,13 @@ export default function App() {
       '/403',
       '/404',
       '/expired',
+      '/personal',
       '/dashboard',
       '/groups',
       '/add-expense',
       '/expenses',
       '/balances',
+      '/manual-balances',
       '/settlements',
       '/analytics',
       '/notifications',
@@ -68,6 +105,7 @@ export default function App() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [showTour, setShowTour] = useState(false);
   const [payTarget, setPayTarget] = useState<ActivePayTarget | null>(null);
+  const [qrScannerOpen, setQrScannerOpen] = useState(false);
   const [refreshSignal, setRefreshSignal] = useState(0);
   const [invitePreview, setInvitePreview] = useState<InvitePreview | null>(null);
   const [toast, setToast] = useState<{ msg: string; tone: 'success' | 'error' } | null>(null);
@@ -76,7 +114,7 @@ export default function App() {
     setToast({ msg, tone });
     window.setTimeout(() => {
       setToast((prev) => (prev?.msg === msg ? null : prev));
-    }, 4200);
+    }, 4500);
   }, []);
 
   const navigate = useCallback(
@@ -99,16 +137,32 @@ export default function App() {
       .catch(() => {});
   }, []);
 
+  const loadInvitePreview = useCallback((token: string) => {
+    apiRequest<Omit<InvitePreview, 'token'>>(`/api/groups/invite/${encodeURIComponent(token)}`)
+      .then((res) => {
+        setInvitePreview({ token, ...res });
+        if (res.valid) {
+          savePendingInviteToken(token);
+        } else {
+          savePendingInviteToken(null);
+        }
+      })
+      .catch((err) => {
+        savePendingInviteToken(null);
+        setInvitePreview({
+          token,
+          valid: false,
+          status: 'invalid',
+          reason: err instanceof Error ? err.message : 'This invitation link is invalid, expired, or has been revoked.',
+        });
+      });
+  }, []);
+
   // Check active session & invite token on mount
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const inviteToken = params.get('invite');
+    const inviteToken = extractInitialInviteToken() || readPendingInviteToken();
     if (inviteToken) {
-      apiRequest<Omit<InvitePreview, 'token'>>(`/api/groups/invite/${inviteToken}`)
-        .then((res) => {
-          setInvitePreview({ token: inviteToken, ...res });
-        })
-        .catch(() => showToast('Invitation link is invalid or expired.', 'error'));
+      loadInvitePreview(inviteToken);
     }
 
     apiRequest<{ user: AuthUser }>('/api/auth/me')
@@ -137,7 +191,7 @@ export default function App() {
       window.removeEventListener('popstate', onPopState);
       window.removeEventListener('settleup:session-expired', onExpired);
     };
-  }, [navigate, refreshUnread, showToast]);
+  }, [loadInvitePreview, navigate, refreshUnread]);
 
   const handleAuthSuccess = (authedUser: AuthUser, sessionToken?: string, rememberMe = true) => {
     if (sessionToken) {
@@ -148,7 +202,13 @@ export default function App() {
     if (!authedUser.preferences.onboardingCompleted && !authedUser.isDemo) {
       setShowTour(true);
     }
-    navigate('/dashboard');
+    const pendingToken = readPendingInviteToken();
+    if (pendingToken) {
+      loadInvitePreview(pendingToken);
+      navigate('/groups');
+    } else {
+      navigate('/dashboard');
+    }
   };
 
   const handleDemoLogin = async () => {
@@ -191,21 +251,61 @@ export default function App() {
   const handleAcceptInvite = async () => {
     if (!invitePreview) return;
     if (!user) {
-      showToast('Please sign in or register first to join the group.', 'error');
+      savePendingInviteToken(invitePreview.token);
+      setInvitePreview(null);
+      showToast('Sign in or create an account to accept your group invitation.', 'success');
       navigate('/login');
       return;
     }
     try {
-      const res = await apiRequest<{ groupId: number }>(`/api/groups/invite/${invitePreview.token}/accept`, {
-        method: 'POST',
-      });
+      const res = await apiRequest<{ groupId: number; groupName: string; alreadyMember?: boolean }>(
+        `/api/groups/invite/${encodeURIComponent(invitePreview.token)}/accept`,
+        { method: 'POST' }
+      );
+      savePendingInviteToken(null);
+      const joinedGroupName = res.groupName || invitePreview.groupName || 'group';
       setInvitePreview(null);
       window.history.replaceState({}, '', '/groups');
       navigate('/groups', { groupId: res.groupId });
-      showToast(`Joined "${invitePreview.groupName}"!`, 'success');
+      showToast(
+        res.alreadyMember
+          ? `You are already a member of "${joinedGroupName}".`
+          : `Joined "${joinedGroupName}"!`,
+        'success'
+      );
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Unable to join group', 'error');
     }
+  };
+
+  const handleDeclineInvite = async () => {
+    if (!invitePreview) return;
+    try {
+      await apiRequest(`/api/groups/invite/${encodeURIComponent(invitePreview.token)}/decline`, {
+        method: 'POST',
+      });
+    } catch {
+      // Best-effort decline
+    }
+    savePendingInviteToken(null);
+    setInvitePreview(null);
+    if (window.location.search.includes('invite=') || window.location.pathname.startsWith('/invite/')) {
+      window.history.replaceState({}, '', user ? '/groups' : '/');
+    }
+    showToast('Invitation declined.', 'success');
+  };
+
+  const handleSwitchAccountForInvite = async () => {
+    if (!invitePreview) return;
+    const token = invitePreview.token;
+    await apiRequest('/api/auth/logout', { method: 'POST' }).catch(() => {});
+    setStoredSessionToken(null);
+    setUser(null);
+    setUnreadCount(0);
+    savePendingInviteToken(token);
+    setInvitePreview(null);
+    navigate('/login');
+    showToast('Signed out. Sign in or register with the invited email to accept.', 'success');
   };
 
   if (!authChecked) {
@@ -230,28 +330,81 @@ export default function App() {
     <>
       {/* Pending Group Invitation Modal */}
       {invitePreview && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 space-y-4">
-            <h2 className="font-display text-xl font-bold text-slate-900">Group Invitation</h2>
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/55 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Group Invitation"
+        >
+          <div className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="font-display text-xl font-bold text-slate-900">Group Invitation</h2>
+              {!invitePreview.valid && invitePreview.status && (
+                <span className="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-red-50 text-red-700 border border-red-200 capitalize">
+                  {invitePreview.status === 'accepted' ? 'Already Used' : invitePreview.status}
+                </span>
+              )}
+            </div>
+
             {invitePreview.valid ? (
               <>
-                <p className="text-sm text-slate-600">
+                <p className="text-sm text-slate-700 leading-relaxed">
                   <strong>{invitePreview.inviterName}</strong> invited you to join{' '}
-                  <strong>{invitePreview.groupName}</strong>.
+                  <strong>{invitePreview.groupName}</strong>. Would you like to join?
                 </p>
-                {invitePreview.groupDescription && (
-                  <p className="text-xs text-slate-500 bg-slate-50 p-3 rounded-lg border border-slate-200">
-                    {invitePreview.groupDescription}
+
+                {invitePreview.groupCategory && (
+                  <p className="text-xs text-slate-500">
+                    Category: <span className="font-medium text-slate-700">{invitePreview.groupCategory}</span>
                   </p>
                 )}
-                <div className="flex justify-end gap-2.5 pt-2">
+
+                {!user && (
+                  <p className="text-xs text-slate-600 bg-slate-50 p-3 rounded-lg border border-slate-200">
+                    Sign in or create a free SettleUp account first — you&apos;ll return right here to join{' '}
+                    <strong>{invitePreview.groupName}</strong>.
+                  </p>
+                )}
+
+                {invitePreview.requiresEmailMatch && (
+                  <div className="text-xs text-slate-700 bg-emerald-50/70 p-3 rounded-lg border border-emerald-200 space-y-1.5">
+                    <p>
+                      This invitation is linked to the invited email address.
+                      {user ? ` You are currently signed in as ${user.email}.` : ' Sign in or register using that email address to accept.'}
+                    </p>
+                    {user && (
+                      <button
+                        type="button"
+                        onClick={handleSwitchAccountForInvite}
+                        className="font-semibold text-[#065F46] hover:underline cursor-pointer"
+                      >
+                        Switch account / Sign in with another email
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex flex-wrap justify-end gap-2 pt-2">
                   <button
                     type="button"
-                    onClick={() => setInvitePreview(null)}
-                    className="px-4 py-2 text-sm text-slate-600 border border-slate-300 rounded-lg cursor-pointer"
+                    onClick={handleDeclineInvite}
+                    className="px-3.5 py-2 text-sm text-slate-700 border border-slate-300 hover:bg-slate-50 rounded-lg cursor-pointer"
                   >
-                    Dismiss
+                    Decline
                   </button>
+                  {!user && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        savePendingInviteToken(invitePreview.token);
+                        setInvitePreview(null);
+                        navigate('/register');
+                      }}
+                      className="px-3.5 py-2 text-sm font-semibold text-[#065F46] bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 rounded-lg cursor-pointer"
+                    >
+                      Register
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={handleAcceptInvite}
@@ -263,18 +416,39 @@ export default function App() {
               </>
             ) : (
               <>
-                <p className="text-sm text-red-700">This invitation has expired or been revoked.</p>
-                <button
-                  type="button"
-                  onClick={() => setInvitePreview(null)}
-                  className="px-4 py-2 text-sm font-semibold text-slate-800 bg-slate-100 rounded-lg cursor-pointer"
-                >
-                  Close
-                </button>
+                <p className="text-sm text-red-700 leading-relaxed">
+                  {invitePreview.reason || 'This invitation link is invalid, expired, or has been revoked.'}
+                </p>
+                <div className="flex justify-end pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      savePendingInviteToken(null);
+                      setInvitePreview(null);
+                      if (window.location.search.includes('invite=') || window.location.pathname.startsWith('/invite/')) {
+                        window.history.replaceState({}, '', user ? '/groups' : '/');
+                      }
+                    }}
+                    className="px-4 py-2 text-sm font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                  >
+                    Close
+                  </button>
+                </div>
               </>
             )}
           </div>
         </div>
+      )}
+
+      {/* QR Invite Scanner Modal */}
+      {qrScannerOpen && (
+        <QrInviteScannerModal
+          onClose={() => setQrScannerOpen(false)}
+          onTokenDetected={(token) => {
+            setQrScannerOpen(false);
+            loadInvitePreview(token);
+          }}
+        />
       )}
 
       {/* Toast Notification */}
@@ -334,7 +508,10 @@ export default function App() {
           unreadCount={unreadCount}
           onNavigate={(r) => navigate(r)}
           onReplayTour={() => setShowTour(true)}
+          onOpenQrScanner={() => setQrScannerOpen(true)}
         >
+          {route === '/personal' && <PersonalTrackerView onToast={showToast} />}
+
           {route === '/dashboard' && (
             <DashboardView
               user={user}
@@ -347,6 +524,8 @@ export default function App() {
             <GroupsView
               onSelectGroup={(id) => navigate('/groups', { groupId: id })}
               onNavigate={navigate}
+              onOpenQrScanner={() => setQrScannerOpen(true)}
+              onToast={showToast}
             />
           )}
 
@@ -357,6 +536,7 @@ export default function App() {
               onBack={() => navigate('/groups')}
               onNavigate={navigate}
               onToast={showToast}
+              onOpenQrScanner={() => setQrScannerOpen(true)}
               onOpenPayQr={(target) => setPayTarget(target)}
             />
           )}
@@ -386,6 +566,8 @@ export default function App() {
           {route === '/balances' && (
             <BalancesView currentUser={user} onOpenPayQr={(target) => setPayTarget(target)} />
           )}
+
+          {route === '/manual-balances' && <ManualTripBalancesView onToast={showToast} />}
 
           {route === '/settlements' && (
             <SettlementsView

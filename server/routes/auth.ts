@@ -7,6 +7,7 @@ import {
   hashPassword,
   hashToken,
   isValidEmail,
+  normalizePhone,
   passwordStrengthErrors,
   readSessionToken,
   setSessionCookie,
@@ -29,9 +30,10 @@ function createSessionForUser(userId: number, rememberMe: boolean): string {
 }
 
 authRouter.post('/register', authLimiter, (req, res) => {
-  const { fullName, email, password, avatarUrl, upiId } = req.body as {
+  const { fullName, email, phone, password, avatarUrl, upiId } = req.body as {
     fullName?: string;
     email?: string;
+    phone?: string;
     password?: string;
     avatarUrl?: string;
     upiId?: string;
@@ -39,6 +41,8 @@ authRouter.post('/register', authLimiter, (req, res) => {
 
   const cleanName = (fullName ?? '').trim();
   const cleanEmail = (email ?? '').trim().toLowerCase();
+  const rawPhone = (phone ?? '').trim();
+  const cleanPhone = rawPhone ? normalizePhone(rawPhone) : null;
   const pass = password ?? '';
 
   if (cleanName.length < 2 || cleanName.length > 80) {
@@ -47,6 +51,10 @@ authRouter.post('/register', authLimiter, (req, res) => {
   }
   if (!isValidEmail(cleanEmail)) {
     res.status(400).json({ error: 'Please enter a valid email address.' });
+    return;
+  }
+  if (rawPhone && !cleanPhone) {
+    res.status(400).json({ error: 'Please enter a valid mobile number with country code if required.' });
     return;
   }
   const strengthErrs = passwordStrengthErrors(pass);
@@ -69,22 +77,29 @@ authRouter.post('/register', authLimiter, (req, res) => {
     res.status(409).json({ error: 'An account with this email already exists.' });
     return;
   }
+  if (cleanPhone) {
+    const existingPhone = db.prepare('SELECT id FROM users WHERE phone = ?').get(cleanPhone);
+    if (existingPhone) {
+      res.status(409).json({ error: 'An account with this mobile number already exists.' });
+      return;
+    }
+  }
 
   const passwordHash = hashPassword(pass);
 
   const newUserId = db.transaction(() => {
     const result = db
       .prepare(`
-        INSERT INTO users (full_name, email, password_hash, avatar_url, upi_id, is_demo)
-        VALUES (?, ?, ?, ?, ?, 0)
+        INSERT INTO users (full_name, email, phone, password_hash, avatar_url, upi_id, is_demo)
+        VALUES (?, ?, ?, ?, ?, ?, 0)
       `)
-      .run(cleanName, cleanEmail, passwordHash, avatarUrl ?? null, upiId?.trim() || null);
+      .run(cleanName, cleanEmail, cleanPhone, passwordHash, avatarUrl ?? null, upiId?.trim() || null);
 
     const uid = Number(result.lastInsertRowid);
     db.prepare('INSERT INTO user_preferences (user_id, onboarding_completed) VALUES (?, 0)').run(uid);
     db.prepare(`
       INSERT INTO notifications (user_id, type, title, message, link_path)
-      VALUES (?, 'welcome', 'Welcome to SettleUp', 'Start by creating your first shared group or accepting a group invite.', '/groups')
+      VALUES (?, 'welcome', 'Welcome to SettleUp', 'Manage shared group bills and track your personal income, expenses, and budgets.', '/groups')
     `).run(uid);
     return uid;
   })();

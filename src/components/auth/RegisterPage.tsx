@@ -15,6 +15,7 @@ interface RegisterPageProps {
 export const RegisterPage: React.FC<RegisterPageProps> = ({ onNavigate, onSuccess, onDemoLogin }) => {
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [upiId, setUpiId] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -81,6 +82,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onNavigate, onSucces
         body: JSON.stringify({
           fullName: fullName.trim(),
           email: email.trim(),
+          phone: phone.trim() || undefined,
           upiId: upiId.trim() || undefined,
           password,
           avatarUrl,
@@ -158,10 +160,11 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onNavigate, onSucces
                 autoComplete="name"
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
-                placeholder="Asfiya Khan"
+                placeholder="Enter your full name"
                 className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg bg-white focus:border-[#065F46] focus:ring-2 focus:ring-emerald-500/15 focus:outline-none transition-all"
                 required
               />
+              <p className="text-[11px] text-slate-500 mt-1">Enter the name you want to use on SettleUp.</p>
             </div>
 
             <div>
@@ -173,26 +176,46 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onNavigate, onSucces
                 type="text"
                 value={upiId}
                 onChange={(e) => setUpiId(e.target.value)}
-                placeholder="name@okhdfcbank"
+                placeholder="Enter your UPI ID"
                 className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg bg-white focus:border-[#065F46] focus:ring-2 focus:ring-emerald-500/15 focus:outline-none transition-all"
               />
+              <p className="text-[11px] text-slate-500 mt-1">Example: yourname@upi</p>
             </div>
           </div>
 
-          <div>
-            <label htmlFor="reg-email" className="block text-sm font-medium text-slate-700 mb-1.5">
-              Email address
-            </label>
-            <input
-              id="reg-email"
-              type="email"
-              autoComplete="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@college.edu"
-              className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg bg-white focus:border-[#065F46] focus:ring-2 focus:ring-emerald-500/15 focus:outline-none transition-all"
-              required
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="reg-email" className="block text-sm font-medium text-slate-700 mb-1.5">
+                Email address
+              </label>
+              <input
+                id="reg-email"
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="Enter your email address"
+                className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg bg-white focus:border-[#065F46] focus:ring-2 focus:ring-emerald-500/15 focus:outline-none transition-all"
+                required
+              />
+              <p className="text-[11px] text-slate-500 mt-1">Use an email address you can access.</p>
+            </div>
+
+            <div>
+              <label htmlFor="reg-phone" className="block text-sm font-medium text-slate-700 mb-1.5">
+                Mobile number <span className="text-slate-400 font-normal">(Optional)</span>
+              </label>
+              <input
+                id="reg-phone"
+                type="tel"
+                autoComplete="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="Enter your mobile number"
+                className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg bg-white focus:border-[#065F46] focus:ring-2 focus:ring-emerald-500/15 focus:outline-none transition-all"
+              />
+              <p className="text-[11px] text-slate-500 mt-1">Include your country code if required.</p>
+            </div>
           </div>
 
           <div>
@@ -206,7 +229,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onNavigate, onSucces
                 autoComplete="new-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="e.g. Campus@2026"
+                placeholder="Create a password"
                 className="w-full px-3.5 py-2.5 pr-10 text-sm border border-slate-300 rounded-lg bg-white focus:border-[#065F46] focus:ring-2 focus:ring-emerald-500/15 focus:outline-none transition-all"
                 required
               />

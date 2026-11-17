@@ -4,6 +4,7 @@ import {
   ArrowRight,
   ArrowUpRight,
   FolderPlus,
+  PiggyBank,
   Plus,
   Receipt,
   Scale,
@@ -18,6 +19,7 @@ import type {
   AuthUser,
   ExpenseRecord,
   GroupSummary,
+  PersonalSummaryPayload,
   SimplifiedTransfer,
 } from '../../types/index.ts';
 
@@ -74,6 +76,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [activities, setActivities] = useState<ActivityRecord[]>([]);
   const [monthlyTrend, setMonthlyTrend] = useState<MonthlyPoint[]>([]);
   const [byCategory, setByCategory] = useState<CategoryPoint[]>([]);
+  const [personalSummary, setPersonalSummary] = useState<PersonalSummaryPayload['summary'] | null>(null);
   const [loadError, setLoadError] = useState('');
 
   useEffect(() => {
@@ -89,8 +92,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       apiRequest<{ expenses: ExpenseRecord[] }>('/api/expenses'),
       apiRequest<{ monthlyTrend: MonthlyPoint[]; byCategory: CategoryPoint[] }>('/api/analytics/summary?days=180'),
       apiRequest<{ activities: ActivityRecord[] }>('/api/notifications'),
+      apiRequest<PersonalSummaryPayload>('/api/personal/summary?period=monthly').catch(() => null),
     ])
-      .then(([bal, grp, exp, ana, act]) => {
+      .then(([bal, grp, exp, ana, act, pers]) => {
         if (!active) return;
         setSummary(bal.summary);
         setTransfers(bal.suggestedTransfers.slice(0, 4));
@@ -99,6 +103,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         setMonthlyTrend(ana.monthlyTrend);
         setByCategory(ana.byCategory);
         setActivities(act.activities.slice(0, 6));
+        setPersonalSummary(pers?.summary ?? null);
       })
       .catch((err) => {
         if (!active) return;
@@ -175,6 +180,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               className="px-4 py-2.5 text-sm font-medium text-slate-700 bg-white border border-slate-300 hover:border-slate-400 rounded-lg cursor-pointer"
             >
               Take Guided Tour
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate('/personal')}
+              className="px-4 py-2.5 text-sm font-medium text-[#065F46] bg-emerald-50 border border-emerald-200 rounded-lg cursor-pointer"
+            >
+              Open Personal Tracker
             </button>
           </div>
         </div>
@@ -301,6 +313,53 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <p className="text-xs text-slate-500 mt-1">Awaiting payment or confirmation</p>
         </div>
       </div>
+
+      {/* Separated Personal Finance Snapshot */}
+      {personalSummary && (
+        <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-lg bg-emerald-50 text-[#065F46] flex items-center justify-center shrink-0">
+              <PiggyBank className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="font-display text-sm font-bold text-slate-900">
+                Personal Expense Tracker (This Month)
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Kept separate from shared group ledgers to prevent double-counting.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-6 text-xs">
+            <div>
+              <span className="text-slate-500 block">Personal Income</span>
+              <span className="font-mono-num font-bold text-[#065F46] text-sm">
+                {formatINR(personalSummary.totalIncomePaise)}
+              </span>
+            </div>
+            <div>
+              <span className="text-slate-500 block">Personal Expenses</span>
+              <span className="font-mono-num font-bold text-slate-900 text-sm">
+                {formatINR(personalSummary.totalExpensePaise)}
+              </span>
+            </div>
+            <div>
+              <span className="text-slate-500 block">Remaining</span>
+              <span className="font-mono-num font-bold text-slate-900 text-sm">
+                {formatINR(personalSummary.remainingBalancePaise)}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => onNavigate('/personal')}
+              className="px-3.5 py-2 text-xs font-semibold text-white bg-[#065F46] hover:bg-[#047857] rounded-lg cursor-pointer"
+            >
+              Open Personal Tracker
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">

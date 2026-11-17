@@ -1,20 +1,27 @@
 import React, { useEffect, useState } from 'react';
-import { FolderPlus, Loader2, Plus, Search, Users, X } from 'lucide-react';
+import { Check, FolderPlus, Loader2, Mail, Plus, QrCode, Search, X } from 'lucide-react';
 import { apiRequest } from '../../services/api.ts';
 import { formatINR } from '../../utils/currency.ts';
 import { UserAvatar } from '../common/BrandMark.tsx';
-import type { AppRoute, GroupSummary } from '../../types/index.ts';
+import type { AppRoute, GroupSummary, PendingUserInvitation } from '../../types/index.ts';
 
 interface GroupsViewProps {
   onSelectGroup: (groupId: number) => void;
   onNavigate: (route: AppRoute) => void;
+  onOpenQrScanner?: () => void;
+  onToast?: (msg: string, tone?: 'success' | 'error') => void;
 }
 
 const CATEGORIES = ['All', 'Friends', 'Travel', 'Home & Roommates', 'Family', 'Work & Events', 'Other'];
 const COVER_COLORS = ['#065F46', '#0F172A', '#047857', '#1E293B', '#B45309', '#0D9488'];
 
-export const GroupsView: React.FC<GroupsViewProps> = ({ onSelectGroup }) => {
+export const GroupsView: React.FC<GroupsViewProps> = ({
+  onSelectGroup,
+  onOpenQrScanner,
+  onToast,
+}) => {
   const [groups, setGroups] = useState<GroupSummary[]>([]);
+  const [pendingInvitations, setPendingInvitations] = useState<PendingUserInvitation[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('All');
@@ -36,14 +43,42 @@ export const GroupsView: React.FC<GroupsViewProps> = ({ onSelectGroup }) => {
     if (category !== 'All') params.set('category', category);
     if (showArchived) params.set('archived', 'true');
 
-    apiRequest<{ groups: GroupSummary[] }>(`/api/groups?${params.toString()}`)
-      .then((res) => setGroups(res.groups))
+    Promise.all([
+      apiRequest<{ groups: GroupSummary[] }>(`/api/groups?${params.toString()}`),
+      apiRequest<{ invitations: PendingUserInvitation[] }>('/api/groups/my-pending-invitations'),
+    ])
+      .then(([grpRes, invRes]) => {
+        setGroups(grpRes.groups);
+        setPendingInvitations(invRes.invitations);
+      })
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
     fetchGroups();
   }, [category, showArchived]);
+
+  const handleAcceptPending = async (inv: PendingUserInvitation) => {
+    try {
+      const res = await apiRequest<{ groupId: number }>(`/api/groups/invite/${inv.token}/accept`, {
+        method: 'POST',
+      });
+      onToast?.(`Joined "${inv.group_name}"!`, 'success');
+      onSelectGroup(res.groupId);
+    } catch (err) {
+      onToast?.(err instanceof Error ? err.message : 'Unable to accept invitation.', 'error');
+    }
+  };
+
+  const handleDeclinePending = async (inv: PendingUserInvitation) => {
+    try {
+      await apiRequest(`/api/groups/invite/${inv.token}/decline`, { method: 'POST' });
+      onToast?.(`Declined invitation to "${inv.group_name}".`, 'success');
+      fetchGroups();
+    } catch (err) {
+      onToast?.(err instanceof Error ? err.message : 'Unable to decline invitation.', 'error');
+    }
+  };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -59,7 +94,12 @@ export const GroupsView: React.FC<GroupsViewProps> = ({ onSelectGroup }) => {
         .map((s) => s.trim())
         .filter(Boolean);
 
-      const res = await apiRequest<{ groupId: number }>('/api/groups', {
+      const res = await apiRequest<{
+        groupId: number;
+        invitedCount?: number;
+        emailsSentCount?: number;
+        smtpConfigured?: boolean;
+      }>('/api/groups', {
         method: 'POST',
         body: JSON.stringify({
           name: newName.trim(),
@@ -73,6 +113,16 @@ export const GroupsView: React.FC<GroupsViewProps> = ({ onSelectGroup }) => {
       setNewName('');
       setNewDesc('');
       setInviteEmailsRaw('');
+      if (res.invitedCount && res.invitedCount > 0) {
+        if (res.emailsSentCount === res.invitedCount) {
+          onToast?.(`Group created and ${res.emailsSentCount} invitation email(s) sent.`, 'success');
+        } else if (!res.smtpConfigured) {
+          onToast?.(
+            `Group created with ${res.invitedCount} pending invite(s). Share their links in Members & Invites (SMTP email not configured).`,
+            'success'
+          );
+        }
+      }
       onSelectGroup(res.groupId);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to create group.');
@@ -90,16 +140,71 @@ export const GroupsView: React.FC<GroupsViewProps> = ({ onSelectGroup }) => {
             Dedicated shared spaces for roommates, outings, and trips.
           </p>
         </div>
-        <button
-          type="button"
-          id="tour-create-group"
-          onClick={() => setCreateOpen(true)}
-          className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-[#065F46] hover:bg-[#047857] rounded-lg cursor-pointer self-start"
-        >
-          <Plus className="w-4 h-4" />
-          <span>New Group</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2.5 self-start">
+          {onOpenQrScanner && (
+            <button
+              type="button"
+              onClick={onOpenQrScanner}
+              className="inline-flex items-center gap-2 px-3.5 py-2.5 text-sm font-semibold text-slate-800 bg-white border border-slate-300 hover:border-slate-400 rounded-lg cursor-pointer"
+            >
+              <QrCode className="w-4 h-4 text-[#065F46]" />
+              <span>Scan Invite QR</span>
+            </button>
+          )}
+          <button
+            type="button"
+            id="tour-create-group"
+            onClick={() => setCreateOpen(true)}
+            className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-[#065F46] hover:bg-[#047857] rounded-lg cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>New Group</span>
+          </button>
+        </div>
       </div>
+
+      {/* Pending Group Invitations for Current User */}
+      {pendingInvitations.length > 0 && (
+        <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-5 space-y-3">
+          <div className="flex items-center gap-2">
+            <Mail className="w-4 h-4 text-[#065F46]" />
+            <h2 className="font-display text-sm font-bold text-slate-900">
+              Pending Group Invitations ({pendingInvitations.length})
+            </h2>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {pendingInvitations.map((inv) => (
+              <div
+                key={inv.id}
+                className="bg-white border border-slate-200 rounded-lg p-4 flex items-center justify-between gap-3"
+              >
+                <div className="min-w-0">
+                  <p className="text-sm font-bold text-slate-900 truncate">{inv.group_name}</p>
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    Invited by {inv.inviter_name} · {inv.group_category}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => handleDeclinePending(inv)}
+                    className="px-2.5 py-1.5 text-xs font-medium text-slate-600 border border-slate-300 hover:bg-slate-50 rounded-md cursor-pointer"
+                  >
+                    Decline
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAcceptPending(inv)}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-white bg-[#065F46] hover:bg-[#047857] rounded-md cursor-pointer"
+                  >
+                    <Check className="w-3.5 h-3.5" /> Accept
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Search & Filter Toolbar */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white border border-slate-200 rounded-xl p-4">
@@ -323,9 +428,12 @@ export const GroupsView: React.FC<GroupsViewProps> = ({ onSelectGroup }) => {
                   rows={2}
                   value={inviteEmailsRaw}
                   onChange={(e) => setInviteEmailsRaw(e.target.value)}
-                  placeholder="friend1@example.com, friend2@example.com (or share a QR invite link after creation)"
+                  placeholder="Enter email addresses separated by commas"
                   className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
                 />
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Invited friends receive a link to accept or decline. You can also invite via Phone, Link, or QR Code after creation.
+                </p>
               </div>
 
               <div className="flex justify-end gap-3 pt-2">

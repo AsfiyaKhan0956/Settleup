@@ -6,7 +6,8 @@ import {
   simplifyDebts,
   type MemberNetBalance,
 } from '../server/math.ts';
-import { hashPassword, verifyPassword } from '../server/security.ts';
+import { hashPassword, isValidPhone, normalizePhone, verifyPassword } from '../server/security.ts';
+import { isSmsConfigured, isSmtpConfigured, sendGroupInvitationEmail, sendGroupInvitationSms } from '../server/mailer.ts';
 
 test('Five-person Tea, Coffee & Samosas item-wise split matches exact INR paise expectations', () => {
   // Tea: ₹100 / 4 consumers = ₹25 (2500 paise) each
@@ -213,3 +214,134 @@ test('scrypt password hashing verifies valid passwords and rejects wrong passwor
   assert.equal(verifyPassword('SettleUp#2026', hash), true);
   assert.equal(verifyPassword('WrongPass', hash), false);
 });
+
+test('Phone normalization validates international & 10-digit formats and rejects invalid input', () => {
+  assert.equal(normalizePhone('+91 98765-43210'), '+919876543210');
+  assert.equal(normalizePhone('9876543210'), '+919876543210');
+  assert.equal(normalizePhone('+1 (415) 555-2671'), '+14155552671');
+  assert.equal(isValidPhone('12345'), false);
+  assert.equal(isValidPhone('not-a-phone'), false);
+});
+
+test('Manual large-trip balances simplify into exact optimal transfers via simplifyDebts', () => {
+  // Bunny ₹500 to pay, Rahul ₹800 to pay, Priya ₹1000 to receive, Aarav ₹300 to receive -> ₹1300 balanced
+  const tripBalances: MemberNetBalance[] = [
+    {
+      userId: 101,
+      fullName: 'Bunny (External)',
+      email: '',
+      upiId: null,
+      avatarUrl: null,
+      paidPaise: 0,
+      owedPaise: 50000,
+      settlementsPaidPaise: 0,
+      settlementsReceivedPaise: 0,
+      pendingIncomingPaise: 0,
+      pendingOutgoingPaise: 0,
+      netPaise: -50000,
+    },
+    {
+      userId: 102,
+      fullName: 'Rahul (External)',
+      email: '',
+      upiId: null,
+      avatarUrl: null,
+      paidPaise: 0,
+      owedPaise: 80000,
+      settlementsPaidPaise: 0,
+      settlementsReceivedPaise: 0,
+      pendingIncomingPaise: 0,
+      pendingOutgoingPaise: 0,
+      netPaise: -80000,
+    },
+    {
+      userId: 103,
+      fullName: 'Priya',
+      email: '',
+      upiId: null,
+      avatarUrl: null,
+      paidPaise: 100000,
+      owedPaise: 0,
+      settlementsPaidPaise: 0,
+      settlementsReceivedPaise: 0,
+      pendingIncomingPaise: 0,
+      pendingOutgoingPaise: 0,
+      netPaise: 100000,
+    },
+    {
+      userId: 104,
+      fullName: 'Aarav',
+      email: '',
+      upiId: null,
+      avatarUrl: null,
+      paidPaise: 30000,
+      owedPaise: 0,
+      settlementsPaidPaise: 0,
+      settlementsReceivedPaise: 0,
+      pendingIncomingPaise: 0,
+      pendingOutgoingPaise: 0,
+      netPaise: 30000,
+    },
+  ];
+
+  const transfers = simplifyDebts(tripBalances);
+  assert.equal(transfers.length, 3);
+  assert.equal(
+    transfers.reduce((acc, t) => acc + t.amountPaise, 0),
+    130000
+  );
+  // Largest debtor Rahul (800) pays largest creditor Priya (1000)
+  assert.equal(transfers[0].fromUserId, 102);
+  assert.equal(transfers[0].toUserId, 103);
+  assert.equal(transfers[0].amountPaise, 80000);
+});
+
+test('Mailer honestly reports not_configured when SMTP environment variables are unset', async () => {
+  const prevHost = process.env.SMTP_HOST;
+  const prevUser = process.env.SMTP_USER;
+  const prevPass = process.env.SMTP_PASS;
+  delete process.env.SMTP_HOST;
+  delete process.env.SMTP_USER;
+  delete process.env.SMTP_PASS;
+
+  assert.equal(isSmtpConfigured(), false);
+  const res = await sendGroupInvitationEmail({
+    toEmail: 'friend@example.com',
+    groupName: 'Goa Trip',
+    inviterName: 'Aarav',
+    inviteUrl: 'https://settleup.local/?invite=abc123',
+    expiresInDays: 14,
+  });
+  assert.equal(res.delivered, false);
+  assert.equal(res.deliveryStatus, 'not_configured');
+  assert.ok(res.errorMessage && res.errorMessage.includes('not configured'));
+
+  if (prevHost !== undefined) process.env.SMTP_HOST = prevHost;
+  if (prevUser !== undefined) process.env.SMTP_USER = prevUser;
+  if (prevPass !== undefined) process.env.SMTP_PASS = prevPass;
+});
+
+test('Mailer honestly reports not_configured when Twilio SMS environment variables are unset', async () => {
+  const prevSid = process.env.TWILIO_ACCOUNT_SID;
+  const prevTok = process.env.TWILIO_AUTH_TOKEN;
+  const prevFrom = process.env.TWILIO_FROM_NUMBER;
+  delete process.env.TWILIO_ACCOUNT_SID;
+  delete process.env.TWILIO_AUTH_TOKEN;
+  delete process.env.TWILIO_FROM_NUMBER;
+
+  assert.equal(isSmsConfigured(), false);
+  const res = await sendGroupInvitationSms({
+    toPhone: '+919876543210',
+    groupName: 'Goa Trip',
+    inviterName: 'Aarav',
+    inviteUrl: 'https://settleup.local/?invite=abc123',
+  });
+  assert.equal(res.delivered, false);
+  assert.equal(res.deliveryStatus, 'not_configured');
+  assert.ok(res.errorMessage && res.errorMessage.includes('not configured'));
+
+  if (prevSid !== undefined) process.env.TWILIO_ACCOUNT_SID = prevSid;
+  if (prevTok !== undefined) process.env.TWILIO_AUTH_TOKEN = prevTok;
+  if (prevFrom !== undefined) process.env.TWILIO_FROM_NUMBER = prevFrom;
+});
+

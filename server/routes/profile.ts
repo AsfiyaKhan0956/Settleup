@@ -1,13 +1,15 @@
 import { Router } from 'express';
 import { db } from '../db.ts';
 import { loadUserById, requireAuth, type AuthedRequest } from '../middleware.ts';
+import { normalizePhone } from '../security.ts';
 
 export const profileRouter = Router();
 
 profileRouter.patch('/', requireAuth, (req: AuthedRequest, res) => {
   const userId = req.user!.id;
-  const { fullName, upiId, avatarUrl, preferences } = req.body as {
+  const { fullName, phone, upiId, avatarUrl, preferences } = req.body as {
     fullName?: string;
+    phone?: string | null;
     upiId?: string | null;
     avatarUrl?: string | null;
     preferences?: {
@@ -23,6 +25,28 @@ profileRouter.patch('/', requireAuth, (req: AuthedRequest, res) => {
     return;
   }
 
+  let normalizedPhone: string | null | undefined = undefined;
+  if (phone !== undefined) {
+    const raw = (phone ?? '').trim();
+    if (!raw) {
+      normalizedPhone = null;
+    } else {
+      const norm = normalizePhone(raw);
+      if (!norm) {
+        res.status(400).json({ error: 'Enter a valid mobile number (include country code if required).' });
+        return;
+      }
+      const conflict = db
+        .prepare('SELECT id FROM users WHERE phone = ? AND id <> ?')
+        .get(norm, userId);
+      if (conflict) {
+        res.status(409).json({ error: 'This mobile number is already linked to another account.' });
+        return;
+      }
+      normalizedPhone = norm;
+    }
+  }
+
   if (avatarUrl && !avatarUrl.startsWith('data:image/') && !avatarUrl.startsWith('/')) {
     res.status(400).json({ error: 'Invalid profile picture format.' });
     return;
@@ -33,17 +57,18 @@ profileRouter.patch('/', requireAuth, (req: AuthedRequest, res) => {
   }
 
   db.transaction(() => {
-    if (fullName !== undefined || upiId !== undefined || avatarUrl !== undefined) {
+    if (fullName !== undefined || normalizedPhone !== undefined || upiId !== undefined || avatarUrl !== undefined) {
       const current = db
-        .prepare('SELECT full_name, upi_id, avatar_url FROM users WHERE id = ?')
-        .get(userId) as { full_name: string; upi_id: string | null; avatar_url: string | null };
+        .prepare('SELECT full_name, phone, upi_id, avatar_url FROM users WHERE id = ?')
+        .get(userId) as { full_name: string; phone: string | null; upi_id: string | null; avatar_url: string | null };
 
       db.prepare(`
         UPDATE users
-        SET full_name = ?, upi_id = ?, avatar_url = ?, updated_at = datetime('now')
+        SET full_name = ?, phone = ?, upi_id = ?, avatar_url = ?, updated_at = datetime('now')
         WHERE id = ?
       `).run(
         fullName !== undefined ? fullName.trim() : current.full_name,
+        normalizedPhone !== undefined ? normalizedPhone : current.phone,
         upiId !== undefined ? upiId?.trim() || null : current.upi_id,
         avatarUrl !== undefined ? avatarUrl : current.avatar_url,
         userId

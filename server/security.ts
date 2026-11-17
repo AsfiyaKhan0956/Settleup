@@ -136,6 +136,30 @@ export function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 }
 
+/**
+ * Normalizes a phone number by stripping spaces, dashes, and parentheses while preserving leading '+'.
+ * Returns null if invalid.
+ */
+export function normalizePhone(raw: string): string | null {
+  const cleaned = raw.trim().replace(/[\s\-().]/g, '');
+  if (!cleaned) return null;
+  if (/^\+[1-9]\d{6,14}$/.test(cleaned)) {
+    return cleaned;
+  }
+  if (/^[0-9]{10}$/.test(cleaned)) {
+    // 10-digit local mobile number -> normalize to +91 (default INR context) if no country code supplied
+    return `+91${cleaned}`;
+  }
+  if (/^[1-9]\d{9,14}$/.test(cleaned)) {
+    return `+${cleaned}`;
+  }
+  return null;
+}
+
+export function isValidPhone(raw: string): boolean {
+  return normalizePhone(raw) !== null;
+}
+
 export function passwordStrengthErrors(password: string): string[] {
   const errors: string[] = [];
   if (password.length < 8) errors.push('At least 8 characters');

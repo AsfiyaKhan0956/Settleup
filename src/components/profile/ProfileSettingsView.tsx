@@ -20,6 +20,7 @@ export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
   onToast,
 }) => {
   const [fullName, setFullName] = useState(user.fullName);
+  const [phone, setPhone] = useState(user.phone || '');
   const [upiId, setUpiId] = useState(user.upiId || '');
   const [avatarUrl, setAvatarUrl] = useState<string | null>(user.avatarUrl);
   const [emailNotifications, setEmailNotifications] = useState(user.preferences.emailNotifications);
@@ -52,6 +53,7 @@ export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
         method: 'PATCH',
         body: JSON.stringify({
           fullName: fullName.trim(),
+          phone: phone.trim() || null,
           upiId: upiId.trim() || null,
           avatarUrl,
           preferences: {
@@ -138,6 +140,7 @@ export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
                 type="text"
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
+                placeholder="Enter your full name"
                 required
                 className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
               />
@@ -155,15 +158,30 @@ export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
 
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">
-                UPI ID (Used when generating payment QRs for others to pay you)
+                Mobile Number (Optional — used for group invitations matched to your phone)
+              </label>
+              <input
+                type="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="Enter your mobile number"
+                className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+              />
+              <p className="text-[11px] text-slate-500 mt-1">Include your country code if required.</p>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">
+                UPI ID (Optional — used when generating payment QRs for others to pay you)
               </label>
               <input
                 type="text"
                 value={upiId}
                 onChange={(e) => setUpiId(e.target.value)}
-                placeholder="yourname@okaxis"
+                placeholder="Enter your UPI ID"
                 className="w-full px-3.5 py-2 text-sm font-mono-num border border-slate-300 rounded-lg"
               />
+              <p className="text-[11px] text-slate-500 mt-1">Example: yourname@upi</p>
             </div>
           </div>
 
@@ -219,7 +237,7 @@ export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
                 type="password"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="8+ chars, upper, lower, number"
+                placeholder="Create a new password"
                 required
                 className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
               />

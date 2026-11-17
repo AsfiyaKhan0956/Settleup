@@ -12,6 +12,8 @@ import { analyticsRouter } from './server/routes/analytics.ts';
 import { notificationsRouter } from './server/routes/notifications.ts';
 import { profileRouter } from './server/routes/profile.ts';
 import { assistantRouter } from './server/routes/assistant.ts';
+import { personalRouter } from './server/routes/personal.ts';
+import { manualBalancesRouter } from './server/routes/manualBalances.ts';
 
 async function startServer() {
   initializeDatabase();
@@ -36,6 +38,8 @@ async function startServer() {
   app.use('/api/notifications', notificationsRouter);
   app.use('/api/profile', profileRouter);
   app.use('/api/assistant', assistantRouter);
+  app.use('/api/personal', personalRouter);
+  app.use('/api/manual-balances', manualBalancesRouter);
 
   app.use('/api/*', (_req, res) => {
     res.status(404).json({ error: 'API endpoint not found.' });

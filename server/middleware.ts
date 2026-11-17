@@ -7,6 +7,7 @@ export interface AuthUser {
   id: number;
   fullName: string;
   email: string;
+  phone: string | null;
   avatarUrl: string | null;
   upiId: string | null;
   isDemo: boolean;
@@ -26,7 +27,7 @@ export interface AuthedRequest extends Request {
 export function loadUserById(userId: number): AuthUser | null {
   const row = db
     .prepare(`
-      SELECT u.id, u.full_name, u.email, u.avatar_url, u.upi_id, u.is_demo,
+      SELECT u.id, u.full_name, u.email, u.phone, u.avatar_url, u.upi_id, u.is_demo,
              p.currency, p.theme, p.email_notifications, p.settlement_alerts, p.onboarding_completed
       FROM users u
       LEFT JOIN user_preferences p ON p.user_id = u.id
@@ -37,6 +38,7 @@ export function loadUserById(userId: number): AuthUser | null {
         id: number;
         full_name: string;
         email: string;
+        phone: string | null;
         avatar_url: string | null;
         upi_id: string | null;
         is_demo: number;
@@ -54,6 +56,7 @@ export function loadUserById(userId: number): AuthUser | null {
     id: row.id,
     fullName: row.full_name,
     email: row.email,
+    phone: row.phone ?? null,
     avatarUrl: row.avatar_url,
     upiId: row.upi_id,
     isDemo: row.is_demo === 1,

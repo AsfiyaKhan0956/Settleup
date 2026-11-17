@@ -114,7 +114,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onNavigate, onSuccess, onD
               autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
+              placeholder="Enter your email address"
               className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg bg-white focus:border-[#065F46] focus:ring-2 focus:ring-emerald-500/15 focus:outline-none transition-all"
               required
             />
