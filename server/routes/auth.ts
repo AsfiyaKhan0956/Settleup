@@ -14,6 +14,7 @@ import {
   verifyPassword,
 } from '../security.ts';
 import { loadUserById, requireAuth, type AuthedRequest } from '../middleware.ts';
+import { isSmtpConfigured, sendPasswordResetEmail } from '../mailer.ts';
 
 export const authRouter = Router();
 const authLimiter = createRateLimiter(60_000, 30);
@@ -107,7 +108,7 @@ authRouter.post('/register', authLimiter, (req, res) => {
   const rawToken = createSessionForUser(newUserId, false);
   setSessionCookie(req, res, rawToken, false);
 
-  res.status(201).json({ user: loadUserById(newUserId), sessionToken: rawToken });
+  res.status(201).json({ user: loadUserById(newUserId) });
 });
 
 authRouter.post('/login', authLimiter, (req, res) => {
@@ -137,7 +138,7 @@ authRouter.post('/login', authLimiter, (req, res) => {
   const rawToken = createSessionForUser(row.id, Boolean(rememberMe));
   setSessionCookie(req, res, rawToken, Boolean(rememberMe));
 
-  res.json({ user: loadUserById(row.id), sessionToken: rawToken });
+  res.json({ user: loadUserById(row.id) });
 });
 
 authRouter.post('/demo', authLimiter, (req, res) => {
@@ -152,7 +153,7 @@ authRouter.post('/demo', authLimiter, (req, res) => {
 
   const rawToken = createSessionForUser(demoUser.id, false);
   setSessionCookie(req, res, rawToken, false);
-  res.json({ user: loadUserById(demoUser.id), sessionToken: rawToken });
+  res.json({ user: loadUserById(demoUser.id) });
 });
 
 authRouter.post('/logout', (req, res) => {
@@ -168,7 +169,7 @@ authRouter.get('/me', requireAuth, (req: AuthedRequest, res) => {
   res.json({ user: req.user });
 });
 
-authRouter.post('/forgot-password', authLimiter, (req, res) => {
+authRouter.post('/forgot-password', authLimiter, async (req, res) => {
   const { email } = req.body as { email?: string };
   const cleanEmail = (email ?? '').trim().toLowerCase();
   if (!isValidEmail(cleanEmail)) {
@@ -176,31 +177,29 @@ authRouter.post('/forgot-password', authLimiter, (req, res) => {
     return;
   }
 
-  const user = db.prepare('SELECT id FROM users WHERE email = ?').get(cleanEmail) as
-    | { id: number }
-    | undefined;
-
-  // Always return neutral confirmation; in development preview without SMTP, return devResetToken safely
-  if (!user) {
-    res.json({
-      message: 'If an account matches that email, a password reset token has been generated.',
-    });
+  // Keep the response identical for known and unknown addresses. Never return reset tokens to the browser.
+  const neutralMessage = 'If an account matches that email and password recovery is configured, a reset link will be sent.';
+  const user = db.prepare('SELECT id FROM users WHERE email = ?').get(cleanEmail) as { id: number } | undefined;
+  const appUrl = process.env.APP_URL?.trim();
+  if (!user || !isSmtpConfigured() || !appUrl || !/^https:\/\//i.test(appUrl)) {
+    res.json({ message: neutralMessage });
     return;
   }
 
-  const rawResetToken = generateOpaqueToken(24);
+  db.prepare('UPDATE password_resets SET used = 1 WHERE user_id = ? AND used = 0').run(user.id);
+  const rawResetToken = generateOpaqueToken(32);
   const tokenHash = hashToken(rawResetToken);
-
-  db.prepare(`
+  const result = db.prepare(`
     INSERT INTO password_resets (user_id, token_hash, expires_at)
     VALUES (?, ?, datetime('now', '+30 minutes'))
   `).run(user.id, tokenHash);
-
-  res.json({
-    message:
-      'Password reset token generated (valid for 30 minutes). SMTP email delivery is simulated in local preview mode.',
-    devResetToken: rawResetToken,
-  });
+  const resetUrl = new URL('/forgot-password', appUrl.replace(/\/+$/, '') + '/');
+  resetUrl.searchParams.set('token', rawResetToken);
+  const delivery = await sendPasswordResetEmail({ toEmail: cleanEmail, resetUrl: resetUrl.toString() });
+  if (!delivery.delivered) {
+    db.prepare('DELETE FROM password_resets WHERE id = ?').run(Number(result.lastInsertRowid));
+  }
+  res.json({ message: neutralMessage });
 });
 
 authRouter.post('/reset-password', authLimiter, (req, res) => {
@@ -239,7 +238,7 @@ authRouter.post('/reset-password', authLimiter, (req, res) => {
       newHash,
       resetRow.user_id
     );
-    db.prepare('UPDATE password_resets SET used = 1 WHERE id = ?').run(resetRow.id);
+    db.prepare('UPDATE password_resets SET used = 1 WHERE user_id = ?').run(resetRow.user_id);
     db.prepare('DELETE FROM sessions WHERE user_id = ?').run(resetRow.user_id);
   })();
 
@@ -268,12 +267,21 @@ authRouter.post('/change-password', requireAuth, (req: AuthedRequest, res) => {
     return;
   }
 
-  db.prepare("UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?").run(
-    hashPassword(newPassword!),
-    userId
-  );
+  const currentToken = readSessionToken(req);
+  const currentTokenHash = currentToken ? hashToken(currentToken) : null;
+  db.transaction(() => {
+    db.prepare("UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?").run(
+      hashPassword(newPassword!),
+      userId
+    );
+    if (currentTokenHash) {
+      db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?').run(userId, currentTokenHash);
+    } else {
+      db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
+    }
+  })();
 
-  res.json({ message: 'Password updated successfully.' });
+  res.json({ message: 'Password updated successfully. Other signed-in sessions have been logged out.' });
 });
 
 authRouter.delete('/account', requireAuth, (req: AuthedRequest, res) => {

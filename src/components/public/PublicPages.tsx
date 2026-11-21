@@ -20,9 +20,14 @@ const HELP_ARTICLES = [
     body: 'SettleUp is an accounting ledger, not a banking payment processor. After paying through Google Pay, PhonePe, or Paytm via the generated UPI QR, submit your 12-digit UTR reference. The balance adjusts officially once the recipient clicks "Confirm Receipt".',
   },
   {
+    category: 'Trip Ledger',
+    title: 'How to Track an Itemised Trip Without Inviting Everyone',
+    body: 'Create a Trip Ledger and SettleUp adds Person A and Person B automatically. Rename them, add more participants whenever needed, enter each bill item and price, select who consumed it, and choose who paid. The ledger calculates each person’s actual share and suggests who owes whom. Adding a participant later does not change earlier bills.',
+  },
+  {
     category: 'Groups & Invitations',
     title: 'Sharing Group Invite Links & QR Codes Safely',
-    body: 'Open any Group Workspace -> Members & Invites to generate an expiring invite token and scannable QR code. Invited users must sign in and confirm joining; admins can revoke tokens anytime.',
+    body: 'Open any Group Workspace -> Members & Invites to generate an expiring invite token and scannable QR code. Invitees can open the link in read-only Guest View to see group expenses, balances, analytics, and settlement history without registering. To join and make changes, they must sign in or create an account and accept the invitation. Group admins can revoke tokens anytime.',
   },
 ];
 
@@ -124,7 +129,7 @@ export const LegalPage: React.FC<{
             <strong>1. Data Isolation &amp; Group Access:</strong> SettleUp stores your name, email address, optional profile photo, optional UPI VPA, and group expense entries strictly to compute shared balances among members of groups you explicitly join.
           </p>
           <p>
-            <strong>2. Password &amp; Session Security:</strong> Passwords are hashed using salted cryptographic <code className="font-mono-num text-xs bg-slate-100 px-1 py-0.5 rounded">scrypt</code> digests and never stored in plain text. Sessions are managed via HTTP-only cookies.
+            <strong>2. Password &amp; Session Security:</strong> Passwords are hashed using salted cryptographic <code className="font-mono-num text-xs bg-slate-100 px-1 py-0.5 rounded">scrypt</code> digests and never stored in plain text. Sessions are managed via HTTP-only cookies; session tokens are not stored in browser local storage. Group invitation links provide time-limited, read-only access to the specifically invited group and can be revoked by a group admin.
           </p>
           <p>
             <strong>3. AI Help Assistant Privacy:</strong> Queries sent to the SettleUp AI Help Assistant are routed server-side and restricted to feature guidance without exposing private financial records of other users.

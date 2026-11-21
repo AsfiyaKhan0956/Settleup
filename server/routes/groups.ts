@@ -2,10 +2,11 @@ import { Router } from 'express';
 import QRCode from 'qrcode';
 import { db } from '../db.ts';
 import { computeGroupBalances, getMembership, requireAuth, type AuthedRequest } from '../middleware.ts';
-import { generateOpaqueToken, isValidEmail, normalizePhone } from '../security.ts';
+import { createRateLimiter, generateOpaqueToken, hashToken, isValidEmail, normalizePhone } from '../security.ts';
 import { getPublicAppBaseUrl, isSmtpConfigured, isSmsConfigured, sendGroupInvitationEmail, sendGroupInvitationSms } from '../mailer.ts';
 
 export const groupsRouter = Router();
+const guestGroupViewLimiter = createRateLimiter(60_000, 60);
 
 function parseSqliteUtcMs(ts: string): number {
   if (!ts) return 0;
@@ -15,7 +16,7 @@ function parseSqliteUtcMs(ts: string): number {
 }
 
 function buildWhatsAppShareUrl(groupName: string, inviteUrl: string, phone?: string | null): string {
-  const message = `Hey! I've invited you to join my group "${groupName}" on SettleUp. Open this link to view and accept the invitation: ${inviteUrl}`;
+  const message = `Hey! I've invited you to join my group "${groupName}" on SettleUp. Open this link to view the group as a guest, or sign in to join:\n${inviteUrl}`;
   const digits = phone ? phone.replace(/\D/g, '') : '';
   return digits
     ? `https://wa.me/${digits}?text=${encodeURIComponent(message)}`
@@ -23,7 +24,7 @@ function buildWhatsAppShareUrl(groupName: string, inviteUrl: string, phone?: str
 }
 
 function buildSmsShareUrl(groupName: string, inviterName: string, inviteUrl: string, phone?: string | null): string {
-  const message = `${inviterName} invited you to join "${groupName}" on SettleUp. Accept or decline here: ${inviteUrl}`;
+  const message = `${inviterName} invited you to join "${groupName}" on SettleUp. View the group as a guest, or sign in to join:\n${inviteUrl}`;
   const clean = phone ? phone.replace(/[^\d+]/g, '') : '';
   return clean
     ? `sms:${clean}?body=${encodeURIComponent(message)}`
@@ -306,6 +307,7 @@ groupsRouter.get('/invite/:token', (req, res) => {
     else reason = 'This invitation has already been used.';
   }
 
+  res.setHeader('Cache-Control', 'no-store');
   res.json({
     valid,
     status: effectiveStatus,
@@ -318,6 +320,80 @@ groupsRouter.get('/invite/:token', (req, res) => {
     inviterName: inv.inviter_name,
     expiresAt: inv.expires_at,
   });
+});
+
+function setGuestSessionCookie(req: import('express').Request, res: import('express').Response, rawToken: string, maxAgeMs: number): void {
+  const secure = Boolean(req.secure || process.env.NODE_ENV === 'production');
+  res.cookie('settleup_guest_sid', rawToken, {
+    httpOnly: true,
+    secure,
+    sameSite: secure ? 'none' : 'lax',
+    path: '/api/groups/guest-session',
+    maxAge: maxAgeMs,
+  });
+}
+
+function clearGuestSessionCookie(req: import('express').Request, res: import('express').Response): void {
+  const secure = Boolean(req.secure || process.env.NODE_ENV === 'production');
+  res.clearCookie('settleup_guest_sid', { httpOnly: true, secure, sameSite: secure ? 'none' : 'lax', path: '/api/groups/guest-session' });
+}
+
+function buildGuestGroupPayload(groupId: number) {
+  const group = db.prepare('SELECT id, name, description, category FROM groups WHERE id = ?').get(groupId) as { id: number; name: string; description: string; category: string } | undefined;
+  if (!group) return null;
+  const members = db.prepare(`SELECT u.id, u.full_name, gm.role, gm.joined_at FROM group_members gm JOIN users u ON u.id = gm.user_id WHERE gm.group_id = ? ORDER BY gm.joined_at, u.id`).all(groupId);
+  const expenses = db.prepare(`SELECT e.id, e.title, e.description, e.notes, e.category, e.split_method, e.total_paise, e.expense_date, payer.full_name AS payer_name, creator.full_name AS creator_name FROM expenses e JOIN users payer ON payer.id = e.paid_by_user_id JOIN users creator ON creator.id = e.created_by_user_id WHERE e.group_id = ? ORDER BY e.expense_date DESC, e.id DESC`).all(groupId) as Array<{ id: number; title: string; description: string; notes: string; category: string; split_method: string; total_paise: number; expense_date: string; payer_name: string; creator_name: string }>;
+  const detailedExpenses = expenses.map((expense) => ({
+    ...expense,
+    shares: db.prepare(`SELECT u.full_name, es.owed_paise FROM expense_splits es JOIN users u ON u.id = es.user_id WHERE es.expense_id = ? ORDER BY es.owed_paise DESC`).all(expense.id),
+    items: db.prepare(`SELECT ei.id, ei.name, ei.unit_price_paise, ei.quantity, ei.total_paise, GROUP_CONCAT(u.full_name, ', ') AS consumers FROM expense_items ei LEFT JOIN item_consumers ic ON ic.item_id = ei.id LEFT JOIN users u ON u.id = ic.user_id WHERE ei.expense_id = ? GROUP BY ei.id ORDER BY ei.id`).all(expense.id),
+  }));
+  const settlements = db.prepare(`SELECT s.id, s.amount_paise, s.status, s.created_at, payer.full_name AS payer_name, receiver.full_name AS receiver_name FROM settlements s JOIN users payer ON payer.id = s.payer_user_id JOIN users receiver ON receiver.id = s.receiver_user_id WHERE s.group_id = ? ORDER BY s.created_at DESC, s.id DESC`).all(groupId);
+  const activity = db.prepare(`SELECT a.action, a.entity_type, a.summary, a.created_at, u.full_name AS actor_name FROM activity_logs a JOIN users u ON u.id = a.user_id WHERE a.group_id = ? ORDER BY a.created_at DESC, a.id DESC LIMIT 30`).all(groupId);
+  const balances = computeGroupBalances(groupId);
+  const categoryTotals = db.prepare(`SELECT category, SUM(total_paise) AS total_paise FROM expenses WHERE group_id = ? GROUP BY category ORDER BY total_paise DESC`).all(groupId);
+  return {
+    group, members, expenses: detailedExpenses,
+    balances: { members: balances.members.map((member) => ({ fullName: member.fullName, paidPaise: member.paidPaise, owedPaise: member.owedPaise, netPaise: member.netPaise })), transfers: balances.transfers.map((transfer) => ({ fromName: transfer.fromName, toName: transfer.toName, amountPaise: transfer.amountPaise })), totalExpenditurePaise: balances.totalExpenditurePaise, confirmedSettledPaise: balances.confirmedSettledPaise },
+    settlements, activity, analytics: { expenseCount: expenses.length, categoryTotals }, readOnly: true as const,
+  };
+}
+
+groupsRouter.post('/invite/:token/guest-session', guestGroupViewLimiter, (req, res) => {
+  const token = (req.params.token ?? '').trim();
+  const invitation = db.prepare('SELECT id, group_id, status, max_uses, use_count, expires_at FROM invitations WHERE token = ?').get(token) as { id: number; group_id: number; status: string; max_uses: number; use_count: number; expires_at: string } | undefined;
+  if (!invitation || invitation.status !== 'pending' || invitation.use_count >= invitation.max_uses || parseSqliteUtcMs(invitation.expires_at) <= Date.now()) {
+    res.status(403).json({ error: 'This guest invitation is invalid, expired, revoked, or already used.' });
+    return;
+  }
+  const rawSessionToken = generateOpaqueToken(32);
+  const expiryMs = Math.min(Date.now() + 12 * 60 * 60 * 1000, parseSqliteUtcMs(invitation.expires_at));
+  const expirySql = new Date(expiryMs).toISOString().slice(0, 19).replace('T', ' ');
+  db.prepare('DELETE FROM guest_sessions WHERE datetime(expires_at) <= datetime(\'now\')').run();
+  db.prepare('INSERT INTO guest_sessions (token_hash, invitation_id, group_id, expires_at) VALUES (?, ?, ?, ?)').run(hashToken(rawSessionToken), invitation.id, invitation.group_id, expirySql);
+  setGuestSessionCookie(req, res, rawSessionToken, Math.max(0, expiryMs - Date.now()));
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ ok: true, expiresAt: expirySql });
+});
+
+groupsRouter.get('/guest-session/view', guestGroupViewLimiter, (req, res) => {
+  const rawToken = (req.cookies as Record<string, string> | undefined)?.settleup_guest_sid;
+  if (!rawToken) { res.status(401).json({ error: 'Guest session is missing. Reopen your invitation link.' }); return; }
+  const session = db.prepare(`
+    SELECT gs.group_id
+    FROM guest_sessions gs JOIN invitations i ON i.id = gs.invitation_id
+    WHERE gs.token_hash = ? AND datetime(gs.expires_at) > datetime('now')
+      AND i.status = 'pending' AND i.use_count < i.max_uses AND datetime(i.expires_at) > datetime('now')
+  `).get(hashToken(rawToken)) as { group_id: number } | undefined;
+  if (!session) {
+    clearGuestSessionCookie(req, res);
+    res.status(401).json({ error: 'Guest access has expired or the invitation was revoked.' });
+    return;
+  }
+  const payload = buildGuestGroupPayload(session.group_id);
+  if (!payload) { clearGuestSessionCookie(req, res); res.status(404).json({ error: 'The invited group no longer exists.' }); return; }
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(payload);
 });
 
 groupsRouter.post('/invite/:token/accept', requireAuth, (req: AuthedRequest, res) => {
@@ -727,26 +803,22 @@ groupsRouter.post('/:id/members', requireAuth, async (req: AuthedRequest, res) =
 
   const duplicate = db
     .prepare(`
-      SELECT id FROM invitations
+      SELECT id, token, expires_at FROM invitations
       WHERE group_id = ? AND lower(COALESCE(invitee_email, '')) = ?
         AND status = 'pending' AND datetime(expires_at) > datetime('now')
+      ORDER BY created_at DESC, id DESC LIMIT 1
     `)
-    .get(groupId, cleanEmail);
+    .get(groupId, cleanEmail) as { id: number; token: string; expires_at: string } | undefined;
 
-  if (duplicate) {
-    res.status(409).json({ error: `An active pending invitation already exists for ${cleanEmail}. You can resend or revoke it below.` });
-    return;
-  }
-
-  const token = generateOpaqueToken(16);
-  const inviteId = Number(
-    db
-      .prepare(`
-        INSERT INTO invitations (group_id, invited_by, invitee_email, channel, token, delivery_status, max_uses, expires_at)
-        VALUES (?, ?, ?, 'email', ?, 'pending', 1, datetime('now', '+14 days'))
-      `)
-      .run(groupId, req.user!.id, cleanEmail, token).lastInsertRowid
+  const token = duplicate?.token ?? generateOpaqueToken(16);
+  const inviteId = duplicate?.id ?? Number(
+    db.prepare(`
+      INSERT INTO invitations (group_id, invited_by, invitee_email, channel, token, delivery_status, max_uses, expires_at)
+      VALUES (?, ?, ?, 'email', ?, 'pending', 1, datetime('now', '+14 days'))
+    `).run(groupId, req.user!.id, cleanEmail, token).lastInsertRowid
   );
+  if (duplicate) db.prepare("UPDATE invitations SET expires_at = datetime('now', '+14 days') WHERE id = ?").run(inviteId);
+  const inviteExpiresInDays = 14;
 
   const baseUrl = getPublicAppBaseUrl(req);
   const inviteUrl = `${baseUrl}/?invite=${token}`;
@@ -756,7 +828,7 @@ groupsRouter.post('/:id/members', requireAuth, async (req: AuthedRequest, res) =
     groupDescription: group.description,
     inviterName: req.user!.fullName,
     inviteUrl,
-    expiresInDays: 14,
+    expiresInDays: inviteExpiresInDays,
   });
 
   db.prepare(`
@@ -765,9 +837,10 @@ groupsRouter.post('/:id/members', requireAuth, async (req: AuthedRequest, res) =
     WHERE id = ?
   `).run(emailResult.deliveryStatus, emailResult.errorMessage ?? null, emailResult.deliveryStatus, inviteId);
 
-  res.status(201).json({
-    status: 'invited',
+  res.status(duplicate ? 200 : 201).json({
+    status: duplicate ? 'resent' : 'invited',
     invitationId: inviteId,
+    reusedExistingInvite: Boolean(duplicate),
     inviteUrl,
     emailDelivered: emailResult.delivered,
     deliveryStatus: emailResult.deliveryStatus,
@@ -892,28 +965,22 @@ groupsRouter.post('/:id/invitations', requireAuth, async (req: AuthedRequest, re
 
     const duplicate = db
       .prepare(`
-        SELECT id FROM invitations
+        SELECT id, token, expires_at FROM invitations
         WHERE group_id = ? AND lower(COALESCE(invitee_email, '')) = ?
           AND status = 'pending' AND datetime(expires_at) > datetime('now')
+        ORDER BY created_at DESC, id DESC LIMIT 1
       `)
-      .get(groupId, cleanEmail);
+      .get(groupId, cleanEmail) as { id: number; token: string; expires_at: string } | undefined;
 
-    if (duplicate) {
-      res.status(409).json({
-        error: `An active pending invitation already exists for ${cleanEmail}. Use Resend or Revoke in the list below.`,
-      });
-      return;
-    }
-
-    const token = generateOpaqueToken(16);
-    const inviteId = Number(
-      db
-        .prepare(`
-          INSERT INTO invitations (group_id, invited_by, invitee_email, channel, token, delivery_status, max_uses, expires_at)
-          VALUES (?, ?, ?, 'email', ?, 'pending', 1, datetime('now', '+' || ? || ' days'))
-        `)
-        .run(groupId, req.user!.id, cleanEmail, token, days).lastInsertRowid
+    const token = duplicate?.token ?? generateOpaqueToken(16);
+    const inviteId = duplicate?.id ?? Number(
+      db.prepare(`
+        INSERT INTO invitations (group_id, invited_by, invitee_email, channel, token, delivery_status, max_uses, expires_at)
+        VALUES (?, ?, ?, 'email', ?, 'pending', 1, datetime('now', '+' || ? || ' days'))
+      `).run(groupId, req.user!.id, cleanEmail, token, days).lastInsertRowid
     );
+    if (duplicate) db.prepare("UPDATE invitations SET expires_at = datetime('now', '+' || ? || ' days') WHERE id = ?").run(days, inviteId);
+    const inviteExpiresInDays = days;
 
     const inviteUrl = `${baseUrl}/?invite=${token}`;
     const emailResult = await sendGroupInvitationEmail({
@@ -922,7 +989,7 @@ groupsRouter.post('/:id/invitations', requireAuth, async (req: AuthedRequest, re
       groupDescription: group.description,
       inviterName: req.user!.fullName,
       inviteUrl,
-      expiresInDays: days,
+      expiresInDays: inviteExpiresInDays,
     });
 
     db.prepare(`
@@ -949,8 +1016,9 @@ groupsRouter.post('/:id/invitations', requireAuth, async (req: AuthedRequest, re
       color: { dark: '#0F172A', light: '#FFFFFF' },
     });
 
-    res.status(201).json({
+    res.status(duplicate ? 200 : 201).json({
       invitationId: inviteId,
+      reusedExistingInvite: Boolean(duplicate),
       channel: 'email',
       inviteUrl,
       qrDataUrl,
@@ -982,27 +1050,22 @@ groupsRouter.post('/:id/invitations', requireAuth, async (req: AuthedRequest, re
 
     const duplicate = db
       .prepare(`
-        SELECT id FROM invitations
+        SELECT id, token FROM invitations
         WHERE group_id = ? AND invitee_phone = ?
           AND status = 'pending' AND datetime(expires_at) > datetime('now')
+        ORDER BY created_at DESC, id DESC LIMIT 1
       `)
-      .get(groupId, cleanPhone);
+      .get(groupId, cleanPhone) as { id: number; token: string } | undefined;
 
-    if (duplicate) {
-      res.status(409).json({ error: 'An active pending invitation already exists for this phone number.' });
-      return;
-    }
-
-    const token = generateOpaqueToken(16);
-    const inviteId = Number(
-      db
-        .prepare(`
-          INSERT INTO invitations (group_id, invited_by, invitee_phone, channel, token, delivery_status, max_uses, expires_at)
-          VALUES (?, ?, ?, 'phone', ?, 'pending', 1, datetime('now', '+' || ? || ' days'))
-        `)
-        .run(groupId, req.user!.id, cleanPhone, token, days).lastInsertRowid
+    const token = duplicate?.token ?? generateOpaqueToken(16);
+    const inviteId = duplicate?.id ?? Number(
+      db.prepare(`
+        INSERT INTO invitations (group_id, invited_by, invitee_phone, channel, token, delivery_status, max_uses, expires_at)
+        VALUES (?, ?, ?, 'phone', ?, 'pending', 1, datetime('now', '+' || ? || ' days'))
+      `).run(groupId, req.user!.id, cleanPhone, token, days).lastInsertRowid
     );
 
+    if (duplicate) db.prepare("UPDATE invitations SET expires_at = datetime('now', '+' || ? || ' days') WHERE id = ?").run(days, inviteId);
     const inviteUrl = `${baseUrl}/?invite=${token}`;
 
     let smsDelivered = false;
@@ -1045,8 +1108,9 @@ groupsRouter.post('/:id/invitations', requireAuth, async (req: AuthedRequest, re
       color: { dark: '#0F172A', light: '#FFFFFF' },
     });
 
-    res.status(201).json({
+    res.status(duplicate ? 200 : 201).json({
       invitationId: inviteId,
+      reusedExistingInvite: Boolean(duplicate),
       channel: 'phone',
       deliveryMode,
       inviteUrl,

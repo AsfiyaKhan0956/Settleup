@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { apiRequest, downloadAuthenticatedCsv } from '../../services/api.ts';
 import { formatINR, rupeesToPaise } from '../../utils/currency.ts';
+import { todayLocalYmd } from '../../utils/date.ts';
 import type { PersonalSummaryPayload, PersonalTransaction } from '../../types/index.ts';
 
 interface PersonalTrackerViewProps {
@@ -24,7 +25,7 @@ interface PersonalTrackerViewProps {
 const CHART_COLORS = ['#065F46', '#0F172A', '#059669', '#D97706', '#0D9488', '#475569', '#B45309', '#334155'];
 
 function todayYmd(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayLocalYmd();
 }
 
 export const PersonalTrackerView: React.FC<PersonalTrackerViewProps> = ({ onToast }) => {
@@ -33,13 +34,14 @@ export const PersonalTrackerView: React.FC<PersonalTrackerViewProps> = ({ onToas
   const [startDate, setStartDate] = useState<string>(() => {
     const d = new Date();
     d.setDate(1);
-    return d.toISOString().slice(0, 10);
+    return todayLocalYmd(d);
   });
   const [endDate, setEndDate] = useState<string>(todayYmd());
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('');
 
   const [data, setData] = useState<PersonalSummaryPayload | null>(null);
   const [loading, setLoading] = useState(true);
+  const [exportOrderOpen, setExportOrderOpen] = useState(false);
 
   // Add/Edit Transaction modal
   const [txModalOpen, setTxModalOpen] = useState(false);
@@ -274,8 +276,30 @@ export const PersonalTrackerView: React.FC<PersonalTrackerViewProps> = ({ onToas
 
   const summary = data?.summary;
 
+  const exportPersonalCsv = async (order: 'newest' | 'oldest') => {
+    try {
+      await downloadAuthenticatedCsv(`/api/personal/export.csv?order=${order}`, 'settleup-personal-tracker.csv');
+      setExportOrderOpen(false);
+    } catch {
+      onToast('CSV export failed.', 'error');
+    }
+  };
+
   return (
     <div className="space-y-7">
+      {exportOrderOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" role="dialog" aria-modal="true" aria-labelledby="personal-csv-order-title">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl">
+            <h2 id="personal-csv-order-title" className="text-base font-bold text-slate-900">Choose CSV order</h2>
+            <p className="mt-1 text-sm text-slate-600">How would you like your transactions arranged?</p>
+            <div className="mt-4 grid gap-2">
+              <button type="button" onClick={() => exportPersonalCsv('newest')} className="rounded-lg bg-[#065F46] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#047857]">Newest first</button>
+              <button type="button" onClick={() => exportPersonalCsv('oldest')} className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">Oldest first</button>
+              <button type="button" onClick={() => setExportOrderOpen(false)} className="px-4 py-2 text-sm text-slate-500 hover:text-slate-800">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
@@ -304,11 +328,7 @@ export const PersonalTrackerView: React.FC<PersonalTrackerViewProps> = ({ onToas
           </button>
           <button
             type="button"
-            onClick={() =>
-              downloadAuthenticatedCsv('/api/personal/export.csv', 'settleup-personal-tracker.csv').catch(() =>
-                onToast('CSV export failed.', 'error')
-              )
-            }
+            onClick={() => setExportOrderOpen(true)}
             className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg cursor-pointer"
           >
             <Download className="w-3.5 h-3.5" />

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Check, FolderPlus, Loader2, Mail, Plus, QrCode, Search, X } from 'lucide-react';
+import { Check, FolderPlus, Loader2, Mail, Plus, Search, X } from 'lucide-react';
 import { apiRequest } from '../../services/api.ts';
 import { formatINR } from '../../utils/currency.ts';
 import { UserAvatar } from '../common/BrandMark.tsx';
@@ -17,7 +17,6 @@ const COVER_COLORS = ['#065F46', '#0F172A', '#047857', '#1E293B', '#B45309', '#0
 
 export const GroupsView: React.FC<GroupsViewProps> = ({
   onSelectGroup,
-  onOpenQrScanner,
   onToast,
 }) => {
   const [groups, setGroups] = useState<GroupSummary[]>([]);
@@ -141,16 +140,6 @@ export const GroupsView: React.FC<GroupsViewProps> = ({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2.5 self-start">
-          {onOpenQrScanner && (
-            <button
-              type="button"
-              onClick={onOpenQrScanner}
-              className="inline-flex items-center gap-2 px-3.5 py-2.5 text-sm font-semibold text-slate-800 bg-white border border-slate-300 hover:border-slate-400 rounded-lg cursor-pointer"
-            >
-              <QrCode className="w-4 h-4 text-[#065F46]" />
-              <span>Scan Invite QR</span>
-            </button>
-          )}
           <button
             type="button"
             id="tour-create-group"

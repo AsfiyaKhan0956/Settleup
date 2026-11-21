@@ -1,4 +1,18 @@
-import nodemailer from 'nodemailer';
+
+
+async function createMailerTransport(options: {
+  host: string;
+  port: number;
+  secure: boolean;
+  auth: { user: string; pass: string };
+  connectionTimeout: number;
+  greetingTimeout: number;
+  socketTimeout: number;
+}) {
+  const mailerModule = await import('nodemailer');
+  const mailer = mailerModule.default ?? mailerModule;
+  return mailer.createTransport(options);
+}
 
 export interface EmailSendResult {
   delivered: boolean;
@@ -14,10 +28,41 @@ export function isSmtpConfigured(): boolean {
   );
 }
 
+
+export async function sendPasswordResetEmail(params: { toEmail: string; resetUrl: string }): Promise<EmailSendResult> {
+  if (!isSmtpConfigured()) {
+    return { delivered: false, deliveryStatus: 'not_configured', errorMessage: 'SMTP email delivery is not configured.' };
+  }
+  const host = process.env.SMTP_HOST!.trim();
+  const port = Number(process.env.SMTP_PORT || 587);
+  const secure = process.env.SMTP_SECURE === 'true' || port === 465;
+  const user = process.env.SMTP_USER!.trim();
+  const pass = process.env.SMTP_PASS!.trim();
+  const from = process.env.SMTP_FROM?.trim() || `SettleUp <${user}>`;
+  try {
+    const transporter = await createMailerTransport({ host, port, secure, auth: { user, pass }, connectionTimeout: 8000, greetingTimeout: 8000, socketTimeout: 10000 });
+    await transporter.sendMail({
+      from, to: params.toEmail, subject: 'Reset your SettleUp password',
+      text: `A password reset was requested for your SettleUp account. This link expires in 30 minutes: ${params.resetUrl}\n\nIf you did not request this, you can ignore this email.`,
+      html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:24px;color:#0f172a"><h2>Reset your SettleUp password</h2><p>We received a request to reset your password. This secure link expires in 30 minutes.</p><p><a href="${params.resetUrl.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}" style="display:inline-block;padding:12px 20px;background:#065f46;color:#fff;text-decoration:none;border-radius:8px">Reset password</a></p><p>If you did not request this, you can safely ignore this email.</p></div>`,
+    });
+    return { delivered: true, deliveryStatus: 'sent' };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'SMTP delivery error';
+    return { delivered: false, deliveryStatus: 'failed', errorMessage: `Password reset email could not be delivered: ${msg}` };
+  }
+}
+
 export function getPublicAppBaseUrl(req?: { protocol?: string; get?: (name: string) => string | undefined; headers?: Record<string, string | string[] | undefined> }): string {
   const envUrl = process.env.APP_URL?.trim();
   if (envUrl && envUrl !== 'MY_APP_URL' && /^https?:\/\//i.test(envUrl)) {
-    return envUrl.replace(/\/+$/, '');
+    const normalizedUrl = envUrl.replace(/\/+$/, '');
+    if (process.env.NODE_ENV !== 'production' || (normalizedUrl.startsWith('https://') && !/localhost|127\.0\.0\.1/i.test(normalizedUrl))) {
+      return normalizedUrl;
+    }
+  }
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('APP_URL must be configured with the public HTTPS SettleUp address before creating invitations in production.');
   }
   if (req) {
     const xfProto = req.headers?.['x-forwarded-proto'];
@@ -54,7 +99,7 @@ export async function sendGroupInvitationEmail(params: {
   const from = process.env.SMTP_FROM?.trim() || `SettleUp <${user}>`;
 
   try {
-    const transporter = nodemailer.createTransport({
+    const transporter = await createMailerTransport({
       host,
       port,
       secure,
@@ -71,10 +116,10 @@ export async function sendGroupInvitationEmail(params: {
       `${params.inviterName} invited you to join "${params.groupName}" on SettleUp. Would you like to join?`,
       params.groupDescription ? `Group note: ${params.groupDescription}` : '',
       ``,
-      `Accept or decline this invitation:`,
+      `Open this invitation to view the group or join:`,
       params.inviteUrl,
       ``,
-      `This invitation expires in ${params.expiresInDays} days. If you don't have a SettleUp account yet, you can register or sign in first and then accept.`,
+      `This invitation expires in ${params.expiresInDays} days. You can view the group in read-only guest mode without an account. To join and make changes, sign in or create a SettleUp account and accept the invitation.`,
     ]
       .filter(Boolean)
       .join('\n');
@@ -95,11 +140,11 @@ export async function sendGroupInvitationEmail(params: {
               ? `<p style="margin: 0 0 18px; padding: 12px; background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; font-size: 13px; color: #475569;">${escapeHtml(params.groupDescription)}</p>`
               : ''
           }
-          <a href="${escapeHtml(params.inviteUrl)}" style="display: inline-block; padding: 12px 22px; background: #065F46; color: #FFFFFF; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">Accept Invitation</a>
-          <p style="margin: 18px 0 6px; font-size: 12px; color: #64748B;">Or open this link in your browser to accept or decline:</p>
+          <a href="${escapeHtml(params.inviteUrl)}" style="display: inline-block; padding: 12px 22px; background: #065F46; color: #FFFFFF; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">View Group Invitation</a>
+          <p style="margin: 18px 0 6px; font-size: 12px; color: #64748B;">Open this link in your browser to view the group, or sign in to join:</p>
           <p style="margin: 0; font-size: 12px; color: #0F172A; word-break: break-all;">${escapeHtml(params.inviteUrl)}</p>
           <p style="margin: 18px 0 0; font-size: 12px; color: #64748B; border-top: 1px solid #E2E8F0; padding-top: 14px;">
-            Expires in ${params.expiresInDays} days. Register or sign in with your SettleUp account to join.
+            Expires in ${params.expiresInDays} days. View the group in read-only guest mode, or sign in / register to join and make changes.
           </p>
         </div>
       </div>
@@ -150,7 +195,7 @@ export async function sendGroupInvitationSms(params: {
   const sid = process.env.TWILIO_ACCOUNT_SID!.trim();
   const token = process.env.TWILIO_AUTH_TOKEN!.trim();
   const fromNumber = process.env.TWILIO_FROM_NUMBER!.trim();
-  const body = `${params.inviterName} invited you to join "${params.groupName}" on SettleUp. Open to accept or decline: ${params.inviteUrl}`;
+  const body = `${params.inviterName} invited you to join "${params.groupName}" on SettleUp. View the group as a guest, or sign in to join: ${params.inviteUrl}`;
 
   try {
     const form = new URLSearchParams();

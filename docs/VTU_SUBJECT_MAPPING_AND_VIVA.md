@@ -20,7 +20,7 @@
 2. **The Problem**: Why equal splits fail (5-person Tea ₹100, Coffee ₹120, Samosas ₹150 example).
 3. **Objectives**: Paise accuracy, 5 split modes, debt graph simplification, honest UPI confirmation.
 4. **System Architecture**: Client UI -> Express REST API -> Integer Financial Engine -> Relational DB.
-5. **Database Design (ER)**: 14 normalized tables, 1:1, 1:N, M:N relationships, and ACID transactions.
+5. **Database Design (ER)**: A normalized relational schema with 1:1, 1:N and M:N relationships, foreign-key constraints, versioned schema records and ACID transactions.
 6. **Core Algorithm 1 — Item-Wise & Remainder Allocation**: Hamilton Largest-Remainder method.
 7. **Core Algorithm 2 — Debt Simplification**: Greedy Min-Cash-Flow reducing transfers to `≤ N - 1`.
 8. **Security & Privacy**: `scrypt` salted hashes, HTTP-only cookies, RBAC group membership guards.

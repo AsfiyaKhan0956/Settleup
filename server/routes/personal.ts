@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { db } from '../db.ts';
 import { requireAuth, type AuthedRequest } from '../middleware.ts';
+import { todayYmd } from '../date.ts';
+import { csvDocument, formatCsvDate } from '../csv.ts';
 
 export const personalRouter = Router();
 
@@ -27,7 +29,9 @@ export const DEFAULT_INCOME_CATEGORIES = [
 ];
 
 function isIsoDate(s: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(`${s}T00:00:00Z`));
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const parsed = new Date(`${s}T00:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === s;
 }
 
 function formatYmd(d: Date): string {
@@ -48,7 +52,7 @@ function resolveDateRange(params: {
   startDate?: string;
   endDate?: string;
 }): { period: 'daily' | 'weekly' | 'monthly' | 'custom'; start: string; end: string; anchorDate: string } {
-  const today = formatYmd(new Date());
+  const today = todayYmd();
   const rawPeriod = params.period ?? 'monthly';
   const anchor = params.date && isIsoDate(params.date) ? params.date : today;
 
@@ -543,12 +547,13 @@ personalRouter.delete('/goals/:id', requireAuth, (req: AuthedRequest, res) => {
 
 personalRouter.get('/export.csv', requireAuth, (req: AuthedRequest, res) => {
   const userId = req.user!.id;
+  const order = req.query.order === 'oldest' ? 'ASC' : 'DESC';
   const rows = db
     .prepare(`
       SELECT id, transaction_date, type, category, title, payment_method, amount_paise, notes
       FROM personal_transactions
       WHERE user_id = ?
-      ORDER BY transaction_date DESC, id DESC
+      ORDER BY transaction_date ${order}, id ${order}
     `)
     .all(userId) as Array<{
     id: number;
@@ -561,18 +566,13 @@ personalRouter.get('/export.csv', requireAuth, (req: AuthedRequest, res) => {
     notes: string;
   }>;
 
-  const esc = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
   const header = ['ID', 'Date', 'Type', 'Category', 'Title', 'Payment Method', 'Amount (INR)', 'Notes'];
   const lines = [
-    header.map(esc).join(','),
-    ...rows.map((r) =>
-      [r.id, r.transaction_date, r.type, r.category, r.title, r.payment_method, (r.amount_paise / 100).toFixed(2), r.notes]
-        .map(esc)
-        .join(',')
-    ),
+    header,
+    ...rows.map((r) => [r.id, formatCsvDate(r.transaction_date), r.type, r.category, r.title, r.payment_method, (r.amount_paise / 100).toFixed(2), r.notes]),
   ];
 
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="settleup-personal-tracker.csv"');
-  res.send(lines.join('\n'));
+  res.send(csvDocument(lines));
 });

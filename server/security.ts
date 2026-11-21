@@ -5,7 +5,12 @@ const SESSION_COOKIE_NAME = 'settleup_sid';
 const SCRYPT_KEYLEN = 64;
 
 function getSecret(): string {
-  return process.env.SESSION_SECRET || 'settleup-dev-secret-do-not-use-in-prod-change-me';
+  const configured = process.env.SESSION_SECRET?.trim();
+  if (configured) return configured;
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('SESSION_SECRET must be configured before running SettleUp in production.');
+  }
+  return 'settleup-dev-secret-do-not-use-in-prod-change-me';
 }
 
 export function hashPassword(password: string): string {
@@ -87,6 +92,11 @@ export function createRateLimiter(windowMs: number, maxRequests: number) {
     const key = req.ip || req.socket.remoteAddress || 'unknown';
     const now = Date.now();
     const cutoff = now - windowMs;
+    if (hits.size > 5000) {
+      for (const [storedKey, timestamps] of hits) {
+        if (!timestamps.some((timestamp) => timestamp > cutoff)) hits.delete(storedKey);
+      }
+    }
     const recent = (hits.get(key) ?? []).filter((ts) => ts > cutoff);
 
     if (recent.length >= maxRequests) {
@@ -112,6 +122,11 @@ export function verifySameOrigin(req: Request, res: Response, next: NextFunction
   }
 
   const origin = req.headers.origin;
+  const fetchSite = req.headers['sec-fetch-site'];
+  if (!origin && fetchSite === 'cross-site') {
+    res.status(403).json({ error: 'Cross-origin mutation blocked.' });
+    return;
+  }
   const host = req.headers.host;
   const forwardedHostRaw = req.headers['x-forwarded-host'];
   const forwardedHost =

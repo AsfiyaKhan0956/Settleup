@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { db } from '../db.ts';
 import { requireAuth, type AuthedRequest } from '../middleware.ts';
+import { csvDocument, formatCsvDate } from '../csv.ts';
+import { shiftYmd, todayYmd } from '../date.ts';
 
 export const analyticsRouter = Router();
 
@@ -9,7 +11,9 @@ analyticsRouter.get('/summary', requireAuth, (req: AuthedRequest, res) => {
   const groupId = req.query.groupId ? Number(req.query.groupId) : null;
   const days = req.query.days ? Number(req.query.days) : 180;
 
-  const dateFilter = `date('now', '-${Math.max(7, Math.min(365, days))} days')`;
+  const safeDays = Math.max(7, Math.min(365, Number.isFinite(days) ? Math.trunc(days) : 180));
+  const dateFilter = `date('${shiftYmd(todayYmd(), -safeDays)}')`;
+  const weeklyDateFilter = `date('${shiftYmd(todayYmd(), -56)}')`;
   const groupCondition = groupId ? 'AND e.group_id = ?' : '';
   const params: Array<number> = groupId ? [userId, groupId] : [userId];
 
@@ -36,7 +40,7 @@ analyticsRouter.get('/summary', requireAuth, (req: AuthedRequest, res) => {
       FROM expenses e
       JOIN group_members gm ON gm.group_id = e.group_id AND gm.user_id = ?
       LEFT JOIN expense_splits es ON es.expense_id = e.id AND es.user_id = gm.user_id
-      WHERE date(e.expense_date) >= date('now', '-56 days') ${groupCondition}
+      WHERE date(e.expense_date) >= ${weeklyDateFilter} ${groupCondition}
       GROUP BY strftime('%Y-W%W', e.expense_date)
       ORDER BY week ASC
     `)
@@ -108,6 +112,7 @@ analyticsRouter.get('/summary', requireAuth, (req: AuthedRequest, res) => {
 analyticsRouter.get('/export.csv', requireAuth, (req: AuthedRequest, res) => {
   const userId = req.user!.id;
   const groupId = req.query.groupId ? Number(req.query.groupId) : null;
+  const order = req.query.order === 'oldest' ? 'ASC' : 'DESC';
 
   const rows = db
     .prepare(`
@@ -120,7 +125,7 @@ analyticsRouter.get('/export.csv', requireAuth, (req: AuthedRequest, res) => {
       JOIN users payer ON payer.id = e.paid_by_user_id
       LEFT JOIN expense_splits es ON es.expense_id = e.id AND es.user_id = ?
       ${groupId ? 'WHERE e.group_id = ?' : ''}
-      ORDER BY e.expense_date DESC, e.id DESC
+      ORDER BY e.expense_date ${order}, e.id ${order}
     `)
     .all(...(groupId ? [userId, userId, groupId] : [userId, userId])) as Array<{
     id: number;
@@ -134,28 +139,23 @@ analyticsRouter.get('/export.csv', requireAuth, (req: AuthedRequest, res) => {
     my_share_paise: number;
   }>;
 
-  const escapeCsv = (val: string | number) => `"${String(val).replace(/"/g, '""')}"`;
   const header = ['Expense ID', 'Date', 'Group', 'Title', 'Category', 'Split Method', 'Paid By', 'Total (INR)', 'My Share (INR)'];
   const lines = [
-    header.map(escapeCsv).join(','),
-    ...rows.map((r) =>
-      [
-        r.id,
-        r.expense_date,
-        r.group_name,
-        r.title,
-        r.category,
-        r.split_method,
-        r.paid_by,
-        (r.total_paise / 100).toFixed(2),
-        (r.my_share_paise / 100).toFixed(2),
-      ]
-        .map(escapeCsv)
-        .join(',')
-    ),
+    header,
+    ...rows.map((r) => [
+      r.id,
+      formatCsvDate(r.expense_date),
+      r.group_name,
+      r.title,
+      r.category,
+      r.split_method,
+      r.paid_by,
+      (r.total_paise / 100).toFixed(2),
+      (r.my_share_paise / 100).toFixed(2),
+    ]),
   ];
 
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="settleup-expenses-report.csv"');
-  res.send(lines.join('\n'));
+  res.send(csvDocument(lines));
 });

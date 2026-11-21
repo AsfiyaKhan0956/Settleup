@@ -172,7 +172,8 @@ expensesRouter.get('/:id', requireAuth, (req: AuthedRequest, res) => {
     expense,
     splits,
     items,
-    canEdit: membership.role === 'admin' || expense.created_by_user_id === userId,
+    canEdit: true,
+    canDelete: membership.role === 'admin' || expense.created_by_user_id === userId,
   });
 });
 
@@ -192,6 +193,13 @@ interface ExpenseWritePayload {
   receiptDataUrl?: string | null;
   participants: SplitParticipantInput[];
   items?: ExpenseItemInput[];
+}
+
+
+function isValidIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
 function validateGroupUsers(groupId: number, userIds: number[]): boolean {
@@ -216,6 +224,11 @@ expensesRouter.post('/', requireAuth, (req: AuthedRequest, res) => {
   }
 
   const title = (body.title ?? '').trim();
+  const expenseDate = body.expenseDate || todayYmd();
+  if (!isValidIsoDate(expenseDate)) {
+    res.status(400).json({ error: 'Please enter a valid expense date.' });
+    return;
+  }
   if (title.length < 2 || title.length > 120) {
     res.status(400).json({ error: 'Expense title must be between 2 and 120 characters.' });
     return;
@@ -255,8 +268,6 @@ expensesRouter.post('/', requireAuth, (req: AuthedRequest, res) => {
     res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid split calculation.' });
     return;
   }
-
-  const expenseDate = body.expenseDate || new Date().toISOString().slice(0, 10);
 
   const expenseId = db.transaction(() => {
     const expId = Number(
@@ -359,12 +370,32 @@ expensesRouter.put('/:id', requireAuth, (req: AuthedRequest, res) => {
   }
 
   const membership = getMembership(existing.group_id, userId);
-  if (!membership || (membership.role !== 'admin' && existing.created_by_user_id !== userId)) {
-    res.status(403).json({ error: 'Only the expense creator or a group admin can edit this expense.' });
+  if (!membership) {
+    res.status(403).json({ error: 'Only registered members of this group can edit its expenses.' });
+    return;
+  }
+
+  const updatedPayerId = Number(body.paidByUserId);
+  const updatedParticipantIds = Array.from(new Set([
+    updatedPayerId,
+    ...(body.participants ?? []).map((participant) => Number(participant.userId)),
+    ...(body.items ?? []).flatMap((item) => (item.consumerUserIds ?? []).map(Number)),
+  ]));
+  if (!validateGroupUsers(existing.group_id, updatedParticipantIds)) {
+    res.status(400).json({ error: 'Payer and all split participants must belong to this group.' });
+    return;
+  }
+  if (body.receiptDataUrl && body.receiptDataUrl.length > 2_000_000) {
+    res.status(400).json({ error: 'Receipt attachment is too large (max ~1.5 MB).' });
     return;
   }
 
   const title = (body.title ?? '').trim();
+  const expenseDate = body.expenseDate || todayYmd();
+  if (!isValidIsoDate(expenseDate)) {
+    res.status(400).json({ error: 'Please enter a valid expense date.' });
+    return;
+  }
   if (title.length < 2 || title.length > 120) {
     res.status(400).json({ error: 'Expense title must be between 2 and 120 characters.' });
     return;
@@ -391,7 +422,7 @@ expensesRouter.put('/:id', requireAuth, (req: AuthedRequest, res) => {
       UPDATE expenses
       SET paid_by_user_id = ?, title = ?, description = ?, notes = ?, category = ?,
           split_method = ?, subtotal_paise = ?, tax_paise = ?, tip_paise = ?, discount_paise = ?,
-          total_paise = ?, expense_date = ?, updated_at = datetime('now')
+          total_paise = ?, expense_date = ?, receipt_data_url = COALESCE(?, receipt_data_url), updated_at = datetime('now')
       WHERE id = ?
     `).run(
       Number(body.paidByUserId),
@@ -405,7 +436,8 @@ expensesRouter.put('/:id', requireAuth, (req: AuthedRequest, res) => {
       computed.tipPaise,
       computed.discountPaise,
       computed.totalPaise,
-      body.expenseDate || new Date().toISOString().slice(0, 10),
+      expenseDate,
+      body.receiptDataUrl ?? null,
       expenseId
     );
 

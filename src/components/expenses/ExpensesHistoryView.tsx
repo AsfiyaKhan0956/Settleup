@@ -28,6 +28,7 @@ interface ExpenseDetailPayload {
     consumers: Array<{ user_id: number; full_name: string }>;
   }>;
   canEdit: boolean;
+  canDelete: boolean;
 }
 
 export const ExpensesHistoryView: React.FC<ExpensesHistoryViewProps> = ({
@@ -332,7 +333,7 @@ export const ExpensesHistoryView: React.FC<ExpensesHistoryViewProps> = ({
 
             {detail.canEdit && (
               <div className="pt-4 border-t border-slate-200 flex items-center justify-between">
-                {confirmDeleteId === detail.expense.id ? (
+                {detail.canDelete && confirmDeleteId === detail.expense.id ? (
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-red-700 font-medium">Confirm delete this expense?</span>
                     <button
@@ -350,7 +351,7 @@ export const ExpensesHistoryView: React.FC<ExpensesHistoryViewProps> = ({
                       Cancel
                     </button>
                   </div>
-                ) : (
+                ) : detail.canDelete ? (
                   <button
                     type="button"
                     onClick={() => setConfirmDeleteId(detail.expense.id)}
@@ -358,7 +359,7 @@ export const ExpensesHistoryView: React.FC<ExpensesHistoryViewProps> = ({
                   >
                     <Trash2 className="w-3.5 h-3.5" /> Delete Expense
                   </button>
-                )}
+                ) : <span className="text-xs text-slate-500">Only the creator or a group admin can delete this expense.</span>}
 
                 <button
                   type="button"

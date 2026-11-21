@@ -27,6 +27,8 @@ export const AnalyticsView: React.FC = () => {
   const [data, setData] = useState<AnalyticsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState('');
+  const [showExportOrder, setShowExportOrder] = useState(false);
 
   useEffect(() => {
     apiRequest<{ groups: GroupSummary[] }>('/api/groups').then((res) => setGroups(res.groups)).catch(() => {});
@@ -42,12 +44,17 @@ export const AnalyticsView: React.FC = () => {
       .finally(() => setLoading(false));
   }, [selectedGroupId, days]);
 
-  const exportCsvUrl = `/api/analytics/export.csv${selectedGroupId ? `?groupId=${selectedGroupId}` : ''}`;
-
-  const handleExportCsv = async () => {
+  const handleExportCsv = async (order: 'newest' | 'oldest') => {
     setExporting(true);
+    setExportError('');
+    setShowExportOrder(false);
     try {
-      await downloadAuthenticatedCsv(exportCsvUrl, 'settleup-expenses-report.csv');
+      const params = new URLSearchParams({ order });
+      if (selectedGroupId) params.set('groupId', selectedGroupId);
+      await downloadAuthenticatedCsv(`/api/analytics/export.csv?${params.toString()}`, 'settleup-expenses-report.csv');
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : 'Unable to export CSV report.');
+      setShowExportOrder(true);
     } finally {
       setExporting(false);
     }
@@ -66,7 +73,7 @@ export const AnalyticsView: React.FC = () => {
         <div className="flex flex-wrap items-center gap-2.5">
           <button
             type="button"
-            onClick={handleExportCsv}
+            onClick={() => setShowExportOrder(true)}
             disabled={exporting}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg cursor-pointer disabled:opacity-60"
           >
@@ -83,6 +90,21 @@ export const AnalyticsView: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {showExportOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" role="dialog" aria-modal="true" aria-labelledby="csv-order-title">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl">
+            <h2 id="csv-order-title" className="text-base font-bold text-slate-900">Choose CSV order</h2>
+            <p className="mt-1 text-sm text-slate-600">How would you like the transactions arranged?</p>
+            {exportError && <p role="alert" className="mt-2 text-xs text-red-700">{exportError}</p>}
+            <div className="mt-4 grid gap-2">
+              <button type="button" onClick={() => handleExportCsv('newest')} disabled={exporting} className="rounded-lg bg-[#065F46] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#047857]">Newest first (default)</button>
+              <button type="button" onClick={() => handleExportCsv('oldest')} disabled={exporting} className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">Oldest first</button>
+              <button type="button" onClick={() => setShowExportOrder(false)} className="px-4 py-2 text-sm text-slate-500 hover:text-slate-800">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center gap-4 no-print">

@@ -1,7 +1,7 @@
 # SettleUp — Complete Engineering Project Documentation
 
 ## 1. Project Abstract
-**SettleUp** is a full-stack collaborative group expense management and settlement platform built to eliminate unfair bill splitting and manual spreadsheet reconciliation among friends, flatmates, families, and travel groups. Unlike basic trackers that force equal divisions, SettleUp introduces an item-wise splitting engine using exact integer-paise arithmetic (`100 paise = ₹1 INR`), graph-based debt simplification (greedy minimum-cash-flow matching), scannable QR group invitations, and an honest two-step UPI payment QR confirmation workflow.
+**SettleUp** is a full-stack collaborative group expense management and settlement platform built to eliminate unfair bill splitting and manual spreadsheet reconciliation among friends, flatmates, families, and travel groups. Unlike basic trackers that force equal divisions, SettleUp introduces an item-wise splitting engine using exact integer-paise arithmetic (`100 paise = ₹1 INR`), graph-based debt simplification (greedy minimum-cash-flow matching), scannable QR group invitations, a read-only guest invitation session, an independent itemised Trip Ledger for non-account participants, and an honest two-step UPI payment QR confirmation workflow.
 
 ---
 
@@ -19,7 +19,7 @@ In everyday shared outings—such as five college friends visiting a café where
 2. Implement five server-validated splitting modes (`Equal`, `Exact`, `Percentage`, `Shares`, and `Item-wise` with proportional tax/tip/discount).
 3. Eliminate floating-point money bugs by computing and storing all currency values in integer **paise**.
 4. Implement a greedy min-cash-flow debt simplification algorithm reducing group transfers to at most `N − 1`.
-5. Provide real-time SQL analytics, CSV/PDF reports, secure authentication, interactive guided onboarding, and a server-side Gemini AI help assistant.
+5. Provide real-time SQL analytics, Excel-safe CSV reports, secure cookie and guest sessions, an independent itemised Trip Ledger, interactive guided onboarding, and a server-side Gemini AI help assistant.
 
 ---
 
@@ -31,7 +31,9 @@ In everyday shared outings—such as five college friends visiting a café where
 | Arithmetic precision | Floating-point decimals | Integer paise + Hamilton Largest-Remainder allocation |
 | Group debt settlement | Pairwise IOUs across every bill | Greedy min-cash-flow graph simplification (`≤ N - 1`) |
 | Payment QR honesty | Often marks paid on click/scan | Two-step flow (`recorded` -> recipient `confirmed`) |
-| Analytics & export | Static or absent | Real SQL aggregations, SVG charts, CSV & Print/PDF |
+| Analytics & export | Static or absent | Real SQL aggregations, SVG charts, date-standardised formula-safe CSV & Print/PDF |
+| Guest group access | Registration required | Expiring, group-scoped, read-only guest sessions |
+| Independent trip ledger | Manual chat / spreadsheets | Item-wise consumption, external participants, payer tracking and settlements |
 
 ---
 

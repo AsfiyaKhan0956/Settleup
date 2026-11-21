@@ -1,16 +1,19 @@
 {
   "name": "react-example",
   "private": true,
+  "engines": { "node": ">=22.0.0" },
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "start": "node server.ts",
+    "backup:db": "tsx scripts/backup-db.ts",
+    "start": "tsx server.ts",
+    "db:init": "tsx scripts/init-db.ts",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx --test tests/financial.test.ts"
+    "test": "tsx --test tests/financial.test.ts tests/trip-ledger.test.ts tests/csv-date.test.ts tests/db-safety.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -41,7 +44,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.2",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",

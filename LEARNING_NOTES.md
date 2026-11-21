@@ -9,7 +9,7 @@ This guide explains every core module in plain, beginner-friendly English so you
 - **What happens if removed**: Expenses could lose ₹0.01 due to decimal rounding, or friends would have to make unnecessary back-and-forth payments.
 
 ## 2. `server/db.ts` — Normalized Relational Database
-- **Why it exists**: Initializes all 14 relational tables with `PRAGMA foreign_keys = ON` and `CHECK` constraints, and seeds the demo cohort (`aarav@settleup.app`) so evaluators see real data immediately while new sign-ups start clean.
+- **Why it exists**: Initializes the relational schema (including guest-session and itemised Trip Ledger tables) with `PRAGMA foreign_keys = ON` and `CHECK` constraints, and seeds the demo cohort (`aarav@settleup.app`) so evaluators see real data immediately while new sign-ups start clean.
 - **Important line**: `db.pragma('foreign_keys = ON')` — without this in SQLite, deleting a parent group or expense wouldn't enforce referential integrity.
 
 ## 3. `server/security.ts` & `server/middleware.ts` — Security & Access Control

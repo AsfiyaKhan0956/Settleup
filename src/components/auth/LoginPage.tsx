@@ -6,7 +6,7 @@ import type { AppRoute, AuthUser } from '../../types/index.ts';
 
 interface LoginPageProps {
   onNavigate: (route: AppRoute) => void;
-  onSuccess: (user: AuthUser, sessionToken?: string, rememberMe?: boolean) => void;
+  onSuccess: (user: AuthUser) => void;
   onDemoLogin: () => Promise<void>;
 }
 
@@ -29,11 +29,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onNavigate, onSuccess, onD
 
     setLoading(true);
     try {
-      const res = await apiRequest<{ user: AuthUser; sessionToken?: string }>('/api/auth/login', {
+      const res = await apiRequest<{ user: AuthUser }>('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify({ email: email.trim(), password, rememberMe }),
       });
-      onSuccess(res.user, res.sessionToken, rememberMe);
+      onSuccess(res.user);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to sign in. Please check your credentials.');
     } finally {

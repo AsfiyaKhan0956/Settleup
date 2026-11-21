@@ -8,7 +8,7 @@ import type { AppRoute, AuthUser } from '../../types/index.ts';
 
 interface RegisterPageProps {
   onNavigate: (route: AppRoute) => void;
-  onSuccess: (user: AuthUser, sessionToken?: string, rememberMe?: boolean) => void;
+  onSuccess: (user: AuthUser) => void;
   onDemoLogin: () => Promise<void>;
 }
 
@@ -77,7 +77,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onNavigate, onSucces
 
     setLoading(true);
     try {
-      const res = await apiRequest<{ user: AuthUser; sessionToken?: string }>('/api/auth/register', {
+      const res = await apiRequest<{ user: AuthUser }>('/api/auth/register', {
         method: 'POST',
         body: JSON.stringify({
           fullName: fullName.trim(),
@@ -88,7 +88,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onNavigate, onSucces
           avatarUrl,
         }),
       });
-      onSuccess(res.user, res.sessionToken, true);
+      onSuccess(res.user);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Registration failed. Please check your details.');
     } finally {

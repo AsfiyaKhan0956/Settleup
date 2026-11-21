@@ -818,7 +818,7 @@ export const GroupWorkspaceView: React.FC<GroupWorkspaceViewProps> = ({
                     <div className="flex flex-wrap gap-2">
                       <a
                         href={`https://wa.me/?text=${encodeURIComponent(
-                          `Hey! I've invited you to join my group "${group.name}" on SettleUp. Open this link to view and accept: ${inviteUrl}`
+                          `Hey! I've invited you to join my group "${group.name}" on SettleUp. Open this link to view and accept:\n${inviteUrl}`
                         )}`}
                         target="_blank"
                         rel="noopener noreferrer"

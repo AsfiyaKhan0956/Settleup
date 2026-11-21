@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { CheckCircle2, AlertCircle, X } from 'lucide-react';
-import { apiRequest, setStoredSessionToken } from './services/api.ts';
+import { apiRequest } from './services/api.ts';
 import type { AppRoute, AuthUser, NotificationRecord } from './types/index.ts';
 import { LandingPage } from './components/landing/LandingPage.tsx';
 import { LoginPage } from './components/auth/LoginPage.tsx';
@@ -11,11 +11,12 @@ import { AppShell } from './components/layout/AppShell.tsx';
 import { DashboardView } from './components/dashboard/DashboardView.tsx';
 import { GroupsView } from './components/groups/GroupsView.tsx';
 import { GroupWorkspaceView } from './components/groups/GroupWorkspaceView.tsx';
+import { GuestGroupView } from './components/groups/GuestGroupView.tsx';
 import { QrInviteScannerModal } from './components/groups/QrInviteScannerModal.tsx';
 import { AddExpenseView } from './components/expenses/AddExpenseView.tsx';
 import { ExpensesHistoryView } from './components/expenses/ExpensesHistoryView.tsx';
 import { BalancesView } from './components/balances/BalancesView.tsx';
-import { ManualTripBalancesView } from './components/balances/ManualTripBalancesView.tsx';
+import { TripLedgerView } from './components/balances/TripLedgerView.tsx';
 import { SettlementsView, UpiQrPaymentModal, type ActivePayTarget } from './components/settlements/SettlementsView.tsx';
 import { AnalyticsView } from './components/analytics/AnalyticsView.tsx';
 import { PersonalTrackerView } from './components/personal/PersonalTrackerView.tsx';
@@ -24,7 +25,7 @@ import { ProfileSettingsView } from './components/profile/ProfileSettingsView.ts
 import { OnboardingTour } from './components/onboarding/OnboardingTour.tsx';
 import { AiHelpAssistant } from './components/assistant/AiHelpAssistant.tsx';
 
-const PUBLIC_ROUTES: AppRoute[] = ['/', '/login', '/register', '/forgot-password', '/help', '/privacy', '/terms', '/403', '/404', '/expired'];
+const PUBLIC_ROUTES: AppRoute[] = ['/', '/login', '/register', '/forgot-password', '/help', '/privacy', '/terms', '/403', '/404', '/expired', '/guest-group'];
 const PENDING_INVITE_KEY = 'settleup_pending_invite';
 
 interface InvitePreview {
@@ -40,6 +41,7 @@ interface InvitePreview {
 }
 
 function extractInitialInviteToken(): string | null {
+  if (window.location.pathname === '/guest-group') return null;
   const params = new URLSearchParams(window.location.search);
   const queryToken = params.get('invite')?.trim();
   if (queryToken) return queryToken;
@@ -88,6 +90,8 @@ export default function App() {
       '/expenses',
       '/balances',
       '/manual-balances',
+      '/trip-ledger',
+      '/guest-group',
       '/settlements',
       '/analytics',
       '/notifications',
@@ -108,6 +112,7 @@ export default function App() {
   const [qrScannerOpen, setQrScannerOpen] = useState(false);
   const [refreshSignal, setRefreshSignal] = useState(0);
   const [invitePreview, setInvitePreview] = useState<InvitePreview | null>(null);
+  const [guestInviteToken, setGuestInviteToken] = useState<string | null>(() => window.location.pathname === '/guest-group' ? new URLSearchParams(window.location.search).get('invite') : null);
   const [toast, setToast] = useState<{ msg: string; tone: 'success' | 'error' } | null>(null);
 
   const showToast = useCallback((msg: string, tone: 'success' | 'error' = 'success') => {
@@ -160,7 +165,8 @@ export default function App() {
 
   // Check active session & invite token on mount
   useEffect(() => {
-    const inviteToken = extractInitialInviteToken() || readPendingInviteToken();
+    const isGuestRoute = window.location.pathname === '/guest-group';
+    const inviteToken = isGuestRoute ? null : extractInitialInviteToken() || readPendingInviteToken();
     if (inviteToken) {
       loadInvitePreview(inviteToken);
     }
@@ -180,10 +186,14 @@ export default function App() {
 
     const onPopState = () => {
       setRoute((window.location.pathname as AppRoute) || '/');
+      setGuestInviteToken(window.location.pathname === '/guest-group' ? new URLSearchParams(window.location.search).get('invite') : null);
+      const inviteToken = extractInitialInviteToken();
+      if (inviteToken) loadInvitePreview(inviteToken);
     };
     const onExpired = () => {
       setUser(null);
-      navigate('/expired');
+      const currentRoute = window.location.pathname as AppRoute;
+      if (!PUBLIC_ROUTES.includes(currentRoute)) navigate('/expired');
     };
     window.addEventListener('popstate', onPopState);
     window.addEventListener('settleup:session-expired', onExpired);
@@ -193,10 +203,7 @@ export default function App() {
     };
   }, [loadInvitePreview, navigate, refreshUnread]);
 
-  const handleAuthSuccess = (authedUser: AuthUser, sessionToken?: string, rememberMe = true) => {
-    if (sessionToken) {
-      setStoredSessionToken(sessionToken, rememberMe);
-    }
+  const handleAuthSuccess = (authedUser: AuthUser) => {
     setUser(authedUser);
     refreshUnread();
     if (!authedUser.preferences.onboardingCompleted && !authedUser.isDemo) {
@@ -213,10 +220,7 @@ export default function App() {
 
   const handleDemoLogin = async () => {
     try {
-      const res = await apiRequest<{ user: AuthUser; sessionToken?: string }>('/api/auth/demo', { method: 'POST' });
-      if (res.sessionToken) {
-        setStoredSessionToken(res.sessionToken, false);
-      }
+      const res = await apiRequest<{ user: AuthUser }>('/api/auth/demo', { method: 'POST' });
       setUser(res.user);
       refreshUnread();
       navigate('/dashboard');
@@ -230,7 +234,6 @@ export default function App() {
 
   const handleLogout = async () => {
     await apiRequest('/api/auth/logout', { method: 'POST' }).catch(() => {});
-    setStoredSessionToken(null);
     setUser(null);
     setUnreadCount(0);
     navigate('/');
@@ -299,7 +302,6 @@ export default function App() {
     if (!invitePreview) return;
     const token = invitePreview.token;
     await apiRequest('/api/auth/logout', { method: 'POST' }).catch(() => {});
-    setStoredSessionToken(null);
     setUser(null);
     setUnreadCount(0);
     savePendingInviteToken(token);
@@ -361,7 +363,7 @@ export default function App() {
 
                 {!user && (
                   <p className="text-xs text-slate-600 bg-slate-50 p-3 rounded-lg border border-slate-200">
-                    Sign in or create a free SettleUp account first — you&apos;ll return right here to join{' '}
+                    You can view this group now in read-only guest mode. Sign in or create a free SettleUp account to join and make changes to{' '}
                     <strong>{invitePreview.groupName}</strong>.
                   </p>
                 )}
@@ -392,6 +394,22 @@ export default function App() {
                   >
                     Decline
                   </button>
+                  {!user && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const token = invitePreview.token;
+                        savePendingInviteToken(token);
+                        setInvitePreview(null);
+                        setGuestInviteToken(token);
+                        setRoute('/guest-group');
+                        window.history.pushState({}, '', `/guest-group?invite=${encodeURIComponent(token)}`);
+                      }}
+                      className="px-3.5 py-2 text-sm font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg cursor-pointer"
+                    >
+                      View as Guest
+                    </button>
+                  )}
                   {!user && (
                     <button
                       type="button"
@@ -493,6 +511,7 @@ export default function App() {
         <RegisterPage onNavigate={navigate} onSuccess={handleAuthSuccess} onDemoLogin={handleDemoLogin} />
       )}
       {route === '/forgot-password' && <ForgotPasswordPage onNavigate={navigate} />}
+      {route === '/guest-group' && <GuestGroupView token={guestInviteToken} isAuthenticated={Boolean(user)} onJoin={(token) => { savePendingInviteToken(token); setGuestInviteToken(null); if (user) { loadInvitePreview(token); navigate('/groups'); } else { navigate('/login'); } }} onBack={() => { setGuestInviteToken(null); navigate('/'); }} />}
       {route === '/help' && <HelpCentrePage onNavigate={navigate} />}
       {route === '/privacy' && <LegalPage mode="privacy" onNavigate={navigate} />}
       {route === '/terms' && <LegalPage mode="terms" onNavigate={navigate} />}
@@ -567,7 +586,7 @@ export default function App() {
             <BalancesView currentUser={user} onOpenPayQr={(target) => setPayTarget(target)} />
           )}
 
-          {route === '/manual-balances' && <ManualTripBalancesView onToast={showToast} />}
+          {(route === '/manual-balances' || route === '/trip-ledger') && <TripLedgerView onToast={showToast} />}
 
           {route === '/settlements' && (
             <SettlementsView

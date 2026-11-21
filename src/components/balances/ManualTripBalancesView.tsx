@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { ApiError, apiRequest } from '../../services/api.ts';
 import { formatINR, rupeesToPaise } from '../../utils/currency.ts';
+import { todayLocalYmd } from '../../utils/date.ts';
 import type {
   ManualBalanceEntry,
   TripLedgerDetail,
@@ -27,7 +28,7 @@ interface ManualTripBalancesViewProps {
 }
 
 function todayYmd(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayLocalYmd();
 }
 
 export const ManualTripBalancesView: React.FC<ManualTripBalancesViewProps> = ({ onToast }) => {

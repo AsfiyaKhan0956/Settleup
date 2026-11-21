@@ -1,6 +1,7 @@
 -- =============================================================================
 -- SettleUp Relational Database Schema (MySQL 8.0 Parity DDL)
--- Matches the live SQLite schema in server/db.ts 1:1 for academic DBMS review.
+-- Academic MySQL 8.0 reference DDL for the core group-expense and new Trip Ledger structures.
+-- The live SQLite schema in server/db.ts is authoritative and also contains additional application tables.
 -- All monetary columns use BIGINT in integer PAISE (100 paise = ₹1 INR).
 -- =============================================================================
 
@@ -9,6 +10,11 @@ CREATE DATABASE IF NOT EXISTS settleup_db
   COLLATE utf8mb4_unicode_ci;
 
 USE settleup_db;
+
+CREATE TABLE schema_migrations (
+  version INT PRIMARY KEY,
+  applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
 
 CREATE TABLE users (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -69,6 +75,20 @@ CREATE TABLE `groups` (
 ) ENGINE=InnoDB;
 
 -- M:N junction table between groups and users
+CREATE TABLE trip_ledgers (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id BIGINT UNSIGNED NOT NULL,
+  group_id BIGINT UNSIGNED NULL,
+  title VARCHAR(100) NOT NULL,
+  description VARCHAR(500) NOT NULL DEFAULT '',
+  event_date DATE NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_trip_ledger_user_date (user_id, event_date),
+  CONSTRAINT fk_trip_ledger_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_trip_ledger_group FOREIGN KEY (group_id) REFERENCES `groups`(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
 CREATE TABLE group_members (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   group_id BIGINT UNSIGNED NOT NULL,
@@ -94,6 +114,91 @@ CREATE TABLE invitations (
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_inv_group FOREIGN KEY (group_id) REFERENCES `groups`(id) ON DELETE CASCADE,
   CONSTRAINT fk_inv_user FOREIGN KEY (invited_by) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE guest_sessions (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  token_hash CHAR(64) NOT NULL UNIQUE,
+  invitation_id BIGINT UNSIGNED NOT NULL,
+  group_id BIGINT UNSIGNED NOT NULL,
+  expires_at DATETIME NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_guest_sessions_expiry (expires_at),
+  CONSTRAINT fk_guest_session_invite FOREIGN KEY (invitation_id) REFERENCES invitations(id) ON DELETE CASCADE,
+  CONSTRAINT fk_guest_session_group FOREIGN KEY (group_id) REFERENCES `groups`(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE trip_ledger_participants (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  ledger_id BIGINT UNSIGNED NOT NULL,
+  display_name VARCHAR(80) NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_trip_ledger_participants_ledger (ledger_id),
+  CONSTRAINT fk_trip_participant_ledger FOREIGN KEY (ledger_id) REFERENCES trip_ledgers(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE trip_ledger_expenses (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  ledger_id BIGINT UNSIGNED NOT NULL,
+  title VARCHAR(120) NOT NULL,
+  description VARCHAR(500) NOT NULL DEFAULT '',
+  expense_date DATE NOT NULL,
+  paid_by_participant_id BIGINT UNSIGNED NOT NULL,
+  total_paise BIGINT NOT NULL CHECK (total_paise > 0),
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_trip_ledger_expenses_ledger_date (ledger_id, expense_date, id),
+  CONSTRAINT fk_trip_expense_ledger FOREIGN KEY (ledger_id) REFERENCES trip_ledgers(id) ON DELETE CASCADE,
+  CONSTRAINT fk_trip_expense_payer FOREIGN KEY (paid_by_participant_id) REFERENCES trip_ledger_participants(id) ON DELETE RESTRICT
+) ENGINE=InnoDB;
+
+CREATE TABLE trip_ledger_items (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  expense_id BIGINT UNSIGNED NOT NULL,
+  name VARCHAR(100) NOT NULL,
+  unit_price_paise BIGINT NOT NULL CHECK (unit_price_paise > 0),
+  quantity INT NOT NULL CHECK (quantity > 0),
+  total_paise BIGINT NOT NULL CHECK (total_paise > 0),
+  INDEX idx_trip_ledger_items_expense (expense_id, id),
+  CONSTRAINT fk_trip_item_expense FOREIGN KEY (expense_id) REFERENCES trip_ledger_expenses(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE trip_ledger_item_consumers (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  item_id BIGINT UNSIGNED NOT NULL,
+  participant_id BIGINT UNSIGNED NOT NULL,
+  share_paise BIGINT NOT NULL CHECK (share_paise >= 0),
+  UNIQUE KEY uq_trip_item_consumer (item_id, participant_id),
+  INDEX idx_trip_consumers_participant (participant_id, item_id),
+  CONSTRAINT fk_trip_consumer_item FOREIGN KEY (item_id) REFERENCES trip_ledger_items(id) ON DELETE CASCADE,
+  CONSTRAINT fk_trip_consumer_participant FOREIGN KEY (participant_id) REFERENCES trip_ledger_participants(id) ON DELETE RESTRICT
+) ENGINE=InnoDB;
+
+CREATE TABLE trip_ledger_shares (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  expense_id BIGINT UNSIGNED NOT NULL,
+  participant_id BIGINT UNSIGNED NOT NULL,
+  owed_paise BIGINT NOT NULL CHECK (owed_paise >= 0),
+  UNIQUE KEY uq_trip_expense_share (expense_id, participant_id),
+  INDEX idx_trip_ledger_shares_expense (expense_id, participant_id),
+  CONSTRAINT fk_trip_share_expense FOREIGN KEY (expense_id) REFERENCES trip_ledger_expenses(id) ON DELETE CASCADE,
+  CONSTRAINT fk_trip_share_participant FOREIGN KEY (participant_id) REFERENCES trip_ledger_participants(id) ON DELETE RESTRICT
+) ENGINE=InnoDB;
+
+CREATE TABLE trip_ledger_settlements (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  ledger_id BIGINT UNSIGNED NOT NULL,
+  payer_participant_id BIGINT UNSIGNED NOT NULL,
+  receiver_participant_id BIGINT UNSIGNED NOT NULL,
+  amount_paise BIGINT NOT NULL CHECK (amount_paise > 0),
+  settlement_date DATE NOT NULL,
+  note VARCHAR(250) NOT NULL DEFAULT '',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_trip_ledger_settlements_ledger (ledger_id, settlement_date, id),
+  CONSTRAINT fk_trip_settle_ledger FOREIGN KEY (ledger_id) REFERENCES trip_ledgers(id) ON DELETE CASCADE,
+  CONSTRAINT fk_trip_settle_payer FOREIGN KEY (payer_participant_id) REFERENCES trip_ledger_participants(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_trip_settle_receiver FOREIGN KEY (receiver_participant_id) REFERENCES trip_ledger_participants(id) ON DELETE RESTRICT,
+  CHECK (payer_participant_id <> receiver_participant_id)
 ) ENGINE=InnoDB;
 
 CREATE TABLE expenses (

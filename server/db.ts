@@ -1,15 +1,30 @@
 import Database from 'better-sqlite3';
 import path from 'node:path';
+import { assertDatabaseFileState } from './dbSafety.ts';
 import { hashPassword, generateOpaqueToken } from './security.ts';
+import { dateToYmd } from './date.ts';
 
-const dbPath = process.env.DB_PATH || path.resolve(process.cwd(), 'settleup.db');
-
-export const db = new Database(dbPath);
+const isProduction = process.env.NODE_ENV === 'production';
+const isExplicitDatabaseInit = process.env.DB_INIT_MODE === 'true';
+const configuredDbPath = process.env.DB_PATH?.trim();
+if (isProduction && (!configuredDbPath || configuredDbPath === ':memory:')) {
+  throw new Error('Production requires DB_PATH to point to a persistent SQLite database file.');
+}
+const dbPath = configuredDbPath || path.resolve(process.cwd(), 'settleup.db');
+// A missing production database may only be created by the explicit `npm run db:init` command.
+// Normal production startup must never create an empty database after a path/configuration mistake.
+assertDatabaseFileState(dbPath, isProduction && !isExplicitDatabaseInit);
+export const db = new Database(dbPath, isProduction && !isExplicitDatabaseInit ? { fileMustExist: true } : {});
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
 export function initializeDatabase(): void {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       full_name TEXT NOT NULL,
@@ -91,6 +106,18 @@ export function initializeDatabase(): void {
       FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
       FOREIGN KEY (invited_by) REFERENCES users(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS guest_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      token_hash TEXT NOT NULL UNIQUE,
+      invitation_id INTEGER NOT NULL,
+      group_id INTEGER NOT NULL,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (invitation_id) REFERENCES invitations(id) ON DELETE CASCADE,
+      FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_guest_sessions_expiry ON guest_sessions(expires_at);
 
     CREATE TABLE IF NOT EXISTS expenses (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -326,6 +353,81 @@ export function initializeDatabase(): void {
       FOREIGN KEY (trip_ledger_id) REFERENCES trip_ledgers(id) ON DELETE CASCADE
     );
 
+    -- Itemised Trip Ledger v2 tables. Legacy manual_balances and events are retained unchanged.
+    CREATE TABLE IF NOT EXISTS trip_ledger_participants (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ledger_id INTEGER NOT NULL,
+      display_name TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (ledger_id) REFERENCES trip_ledgers(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS trip_ledger_expenses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ledger_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      expense_date TEXT NOT NULL,
+      paid_by_participant_id INTEGER NOT NULL,
+      total_paise INTEGER NOT NULL CHECK (total_paise > 0),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (ledger_id) REFERENCES trip_ledgers(id) ON DELETE CASCADE,
+      FOREIGN KEY (paid_by_participant_id) REFERENCES trip_ledger_participants(id) ON DELETE RESTRICT
+    );
+
+    CREATE TABLE IF NOT EXISTS trip_ledger_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      expense_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      unit_price_paise INTEGER NOT NULL CHECK (unit_price_paise > 0),
+      quantity INTEGER NOT NULL CHECK (quantity > 0),
+      total_paise INTEGER NOT NULL CHECK (total_paise > 0),
+      FOREIGN KEY (expense_id) REFERENCES trip_ledger_expenses(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS trip_ledger_item_consumers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id INTEGER NOT NULL,
+      participant_id INTEGER NOT NULL,
+      share_paise INTEGER NOT NULL CHECK (share_paise >= 0),
+      FOREIGN KEY (item_id) REFERENCES trip_ledger_items(id) ON DELETE CASCADE,
+      FOREIGN KEY (participant_id) REFERENCES trip_ledger_participants(id) ON DELETE RESTRICT,
+      UNIQUE (item_id, participant_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS trip_ledger_shares (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      expense_id INTEGER NOT NULL,
+      participant_id INTEGER NOT NULL,
+      owed_paise INTEGER NOT NULL CHECK (owed_paise >= 0),
+      FOREIGN KEY (expense_id) REFERENCES trip_ledger_expenses(id) ON DELETE CASCADE,
+      FOREIGN KEY (participant_id) REFERENCES trip_ledger_participants(id) ON DELETE RESTRICT,
+      UNIQUE (expense_id, participant_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS trip_ledger_settlements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ledger_id INTEGER NOT NULL,
+      payer_participant_id INTEGER NOT NULL,
+      receiver_participant_id INTEGER NOT NULL,
+      amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
+      settlement_date TEXT NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (ledger_id) REFERENCES trip_ledgers(id) ON DELETE CASCADE,
+      FOREIGN KEY (payer_participant_id) REFERENCES trip_ledger_participants(id) ON DELETE RESTRICT,
+      FOREIGN KEY (receiver_participant_id) REFERENCES trip_ledger_participants(id) ON DELETE RESTRICT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_trip_ledger_participants_ledger ON trip_ledger_participants(ledger_id);
+    CREATE INDEX IF NOT EXISTS idx_trip_ledger_expenses_ledger_date ON trip_ledger_expenses(ledger_id, expense_date, id);
+    CREATE INDEX IF NOT EXISTS idx_trip_ledger_items_expense ON trip_ledger_items(expense_id, id);
+    CREATE INDEX IF NOT EXISTS idx_trip_ledger_item_consumers_item ON trip_ledger_item_consumers(item_id, participant_id);
+    CREATE INDEX IF NOT EXISTS idx_trip_ledger_item_consumers_participant ON trip_ledger_item_consumers(participant_id, item_id);
+    CREATE INDEX IF NOT EXISTS idx_trip_ledger_shares_expense ON trip_ledger_shares(expense_id, participant_id);
+    CREATE INDEX IF NOT EXISTS idx_trip_ledger_settlements_ledger ON trip_ledger_settlements(ledger_id, settlement_date, id);
+
     CREATE INDEX IF NOT EXISTS idx_personal_tx_user_date ON personal_transactions(user_id, transaction_date);
     CREATE INDEX IF NOT EXISTS idx_personal_tx_user_type ON personal_transactions(user_id, type);
     CREATE INDEX IF NOT EXISTS idx_manual_balances_user_trip ON manual_balances(user_id, trip_ledger_id);
@@ -333,8 +435,11 @@ export function initializeDatabase(): void {
   `);
 
   applyIncrementalMigrations();
-  seedDemoWorkspaceIfNeeded();
-  seedDemoPersonalAndTripData();
+  db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (1), (2), (3)').run();
+  if (process.env.SEED_DEMO_DATA === 'true') {
+    seedDemoWorkspaceIfNeeded();
+    seedDemoPersonalAndTripData();
+  }
 }
 
 function applyIncrementalMigrations(): void {
@@ -487,7 +592,7 @@ function dateOffset(monthsDelta: number, daysDelta: number): string {
   const d = new Date();
   d.setMonth(d.getMonth() + monthsDelta);
   d.setDate(d.getDate() + daysDelta);
-  return d.toISOString().slice(0, 10);
+  return dateToYmd(d);
 }
 
 /**

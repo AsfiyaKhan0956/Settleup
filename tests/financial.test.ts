@@ -345,3 +345,28 @@ test('Mailer honestly reports not_configured when Twilio SMS environment variabl
   if (prevFrom !== undefined) process.env.TWILIO_FROM_NUMBER = prevFrom;
 });
 
+
+import { csvDocument, formatCsvDate } from '../server/csv.ts';
+import { dateToYmd } from '../server/date.ts';
+
+test('CSV exports use readable dates, Excel UTF-8 BOM, CRLF and formula-safe text', () => {
+  const csv = csvDocument([
+    ['Date', 'Title', 'Amount'],
+    [formatCsvDate('2026-11-20'), '=HYPERLINK("https://example.com")', '450.00'],
+  ]);
+  assert.ok(csv.startsWith('\uFEFF'));
+  assert.ok(csv.includes('20-11-2026'));
+  assert.ok(csv.includes("'=HYPERLINK"));
+  assert.ok(csv.includes('\r\n'));
+});
+
+test('application date formatting honours configured timezone', () => {
+  const previous = process.env.APP_TIME_ZONE;
+  process.env.APP_TIME_ZONE = 'Asia/Kolkata';
+  try {
+    assert.equal(dateToYmd(new Date('2026-11-19T20:00:00.000Z')), '2026-11-20');
+  } finally {
+    if (previous === undefined) delete process.env.APP_TIME_ZONE;
+    else process.env.APP_TIME_ZONE = previous;
+  }
+});

@@ -160,7 +160,7 @@ manualBalancesRouter.post('/ledgers', requireAuth, (req: AuthedRequest, res) => 
   const cleanDate =
     eventDate && /^\d{4}-\d{2}-\d{2}$/.test(eventDate)
       ? eventDate
-      : new Date().toISOString().slice(0, 10);
+      : todayYmd();
 
   const ledgerId = Number(
     db
@@ -293,7 +293,7 @@ manualBalancesRouter.post('/ledgers/:id/entries', requireAuth, (req: AuthedReque
   const cleanDate =
     entryDate && /^\d{4}-\d{2}-\d{2}$/.test(entryDate)
       ? entryDate
-      : new Date().toISOString().slice(0, 10);
+      : todayYmd();
 
   if (cleanName.length < 2 || cleanName.length > 80) {
     res.status(400).json({ error: "Person's name must be between 2 and 80 characters." });

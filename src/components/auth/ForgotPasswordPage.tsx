@@ -1,34 +1,35 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { CheckCircle2, Loader2 } from 'lucide-react';
 import { apiRequest } from '../../services/api.ts';
 import { AuthBackdropLayout } from './AuthBackdropLayout.tsx';
 import type { AppRoute } from '../../types/index.ts';
 
 export const ForgotPasswordPage: React.FC<{ onNavigate: (route: AppRoute) => void }> = ({ onNavigate }) => {
-  const [step, setStep] = useState<'request' | 'reset' | 'done'>('request');
+  const [step, setStep] = useState<'request' | 'reset' | 'done'>(() => new URLSearchParams(window.location.search).get('token') ? 'reset' : 'request');
   const [email, setEmail] = useState('');
-  const [token, setToken] = useState('');
-  const [devTokenNotice, setDevTokenNotice] = useState('');
+  const [token, setToken] = useState(() => new URLSearchParams(window.location.search).get('token') || '');
+  const [requestNotice, setRequestNotice] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (token && window.location.search.includes('token=')) {
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, [token]);
 
   const handleRequest = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
     try {
-      const res = await apiRequest<{ message: string; devResetToken?: string }>('/api/auth/forgot-password', {
+      const res = await apiRequest<{ message: string }>('/api/auth/forgot-password', {
         method: 'POST',
         body: JSON.stringify({ email: email.trim() }),
       });
-      if (res.devResetToken) {
-        setToken(res.devResetToken);
-        setDevTokenNotice(res.message);
-      } else {
-        setDevTokenNotice(res.message);
-      }
-      setStep('reset');
+      setRequestNotice(res.message);
+      setStep('request');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Request failed.');
     } finally {
@@ -58,7 +59,7 @@ export const ForgotPasswordPage: React.FC<{ onNavigate: (route: AppRoute) => voi
       <div>
         <h1 className="font-display text-2xl font-bold text-slate-900">Account Recovery</h1>
         <p className="text-sm text-slate-600 mt-1 mb-5">
-          Reset your password securely with an expiring 30-minute recovery token.
+          Request a secure password-reset link. Links expire after 30 minutes.
         </p>
 
         {error && (
@@ -69,6 +70,7 @@ export const ForgotPasswordPage: React.FC<{ onNavigate: (route: AppRoute) => voi
 
         {step === 'request' && (
           <form onSubmit={handleRequest} className="space-y-4">
+            {requestNotice && <div role="status" className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900">{requestNotice}</div>}
             <div>
               <label htmlFor="fp-email" className="block text-sm font-medium text-slate-700 mb-1.5">
                 Registered email address
@@ -89,16 +91,14 @@ export const ForgotPasswordPage: React.FC<{ onNavigate: (route: AppRoute) => voi
               className="w-full py-2.5 px-4 text-sm font-semibold text-white bg-[#065F46] hover:bg-[#047857] rounded-lg flex items-center justify-center gap-2 cursor-pointer"
             >
               {loading && <Loader2 className="w-4 h-4 animate-spin" />}
-              <span>Generate Recovery Token</span>
+              <span>Send Reset Link</span>
             </button>
           </form>
         )}
 
         {step === 'reset' && (
           <form onSubmit={handleReset} className="space-y-4">
-            <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900">
-              {devTokenNotice}
-            </div>
+            <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900">Enter the reset token from your SettleUp password-recovery email.</div>
             <div>
               <label htmlFor="fp-token" className="block text-sm font-medium text-slate-700 mb-1.5">
                 Recovery Token

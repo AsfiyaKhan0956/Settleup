@@ -47,7 +47,7 @@ const NAV_SECTIONS: Array<{
       { route: '/add-expense', label: 'Add Group Expense', icon: Plus },
       { route: '/expenses', label: 'Expense History', icon: Receipt },
       { route: '/balances', label: 'Group Balances', icon: Scale },
-      { route: '/manual-balances', label: 'Large Trips / Manual', icon: Users },
+      { route: '/trip-ledger', label: 'Trip Ledger', icon: Users },
       { route: '/settlements', label: 'Settlements & QR', icon: Wallet },
       { route: '/analytics', label: 'Group Analytics', icon: BarChart3 },
     ],

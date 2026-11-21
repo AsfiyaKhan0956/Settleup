@@ -18,6 +18,8 @@ export type AppRoute =
   | '/expenses'
   | '/balances'
   | '/manual-balances'
+  | '/trip-ledger'
+  | '/guest-group'
   | '/settlements'
   | '/analytics'
   | '/notifications'

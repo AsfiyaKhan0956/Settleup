@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Check, Loader2, Plus, Receipt, Sparkles, Trash2, Upload } from 'lucide-react';
 import { apiRequest } from '../../services/api.ts';
 import { formatINR, previewSplitCalculation, rupeesToPaise } from '../../utils/currency.ts';
+import { todayLocalYmd } from '../../utils/date.ts';
 import type { AuthUser, GroupSummary, MemberNetBalance, SplitMethod } from '../../types/index.ts';
 
 interface AddExpenseViewProps {
@@ -17,7 +18,7 @@ interface ItemRow {
   id: string;
   name: string;
   unitPriceStr: string;
-  quantity: number;
+  quantity: number | '';
   consumerUserIds: number[];
 }
 
@@ -49,10 +50,10 @@ export const AddExpenseView: React.FC<AddExpenseViewProps> = ({
   const [description, setDescription] = useState('');
   const [notes, setNotes] = useState('');
   const [category, setCategory] = useState('Food');
-  const [expenseDate, setExpenseDate] = useState(new Date().toISOString().slice(0, 10));
+  const [expenseDate, setExpenseDate] = useState(todayLocalYmd());
   const [paidByUserId, setPaidByUserId] = useState<number>(currentUser.id);
   const [splitMethod, setSplitMethod] = useState<SplitMethod>('itemized');
-  const [totalAmountStr, setTotalAmountStr] = useState('370');
+  const [totalAmountStr, setTotalAmountStr] = useState('');
   const [receiptDataUrl, setReceiptDataUrl] = useState<string | null>(null);
 
   // Per-participant split inputs
@@ -75,9 +76,7 @@ export const AddExpenseView: React.FC<AddExpenseViewProps> = ({
   useEffect(() => {
     apiRequest<{ groups: GroupSummary[] }>('/api/groups').then((res) => {
       setGroups(res.groups);
-      if (!selectedGroupId && res.groups.length > 0) {
-        setSelectedGroupId(initialGroupId || res.groups[0].id);
-      }
+      if (initialGroupId) setSelectedGroupId(initialGroupId);
     });
   }, []);
 
@@ -378,10 +377,11 @@ export const AddExpenseView: React.FC<AddExpenseViewProps> = ({
                 <label className="block text-xs font-medium text-slate-700 mb-1">Group</label>
                 <select
                   value={selectedGroupId}
-                  onChange={(e) => setSelectedGroupId(Number(e.target.value))}
+                  onChange={(e) => setSelectedGroupId(e.target.value ? Number(e.target.value) : '')}
                   disabled={Boolean(editExpenseId)}
                   className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
                 >
+                  <option value="">Choose a group</option>
                   {groups.map((g) => (
                     <option key={g.id} value={g.id}>
                       {g.name}
@@ -625,11 +625,13 @@ export const AddExpenseView: React.FC<AddExpenseViewProps> = ({
                           type="number"
                           min="1"
                           value={item.quantity}
+                          onFocus={() => setItems((prev) => prev.map((row) => row.id === item.id && row.quantity === 1 ? { ...row, quantity: '' } : row))}
+                          onBlur={() => setItems((prev) => prev.map((row) => row.id === item.id && row.quantity === '' ? { ...row, quantity: 1 } : row))}
                           onChange={(e) =>
                             setItems((prev) =>
                               prev.map((row) =>
                                 row.id === item.id
-                                  ? { ...row, quantity: Math.max(1, Number(e.target.value) || 1) }
+                                  ? { ...row, quantity: e.target.value === '' ? '' : Math.max(1, Number(e.target.value) || 1) }
                                   : row
                               )
                             )
@@ -639,7 +641,7 @@ export const AddExpenseView: React.FC<AddExpenseViewProps> = ({
                       </div>
                       <div className="sm:col-span-2 flex items-center justify-between sm:justify-end gap-2">
                         <span className="font-mono-num text-sm font-semibold text-slate-800">
-                          {formatINR(rupeesToPaise(item.unitPriceStr || '0') * item.quantity)}
+                          {formatINR(rupeesToPaise(item.unitPriceStr || '0') * Number(item.quantity || 1))}
                         </span>
                         {items.length > 1 && (
                           <button
@@ -739,6 +741,8 @@ export const AddExpenseView: React.FC<AddExpenseViewProps> = ({
                       step="0.01"
                       min="0"
                       value={taxStr}
+                      onFocus={() => { if (taxStr === '0') setTaxStr(''); }}
+                      onBlur={() => { if (!taxStr.trim()) setTaxStr('0'); }}
                       onChange={(e) => setTaxStr(e.target.value)}
                       className="w-full px-3 py-1.5 text-sm font-mono-num border border-slate-300 rounded-lg"
                     />
@@ -750,6 +754,8 @@ export const AddExpenseView: React.FC<AddExpenseViewProps> = ({
                       step="0.01"
                       min="0"
                       value={tipStr}
+                      onFocus={() => { if (tipStr === '0') setTipStr(''); }}
+                      onBlur={() => { if (!tipStr.trim()) setTipStr('0'); }}
                       onChange={(e) => setTipStr(e.target.value)}
                       className="w-full px-3 py-1.5 text-sm font-mono-num border border-slate-300 rounded-lg"
                     />
@@ -761,6 +767,8 @@ export const AddExpenseView: React.FC<AddExpenseViewProps> = ({
                       step="0.01"
                       min="0"
                       value={discountStr}
+                      onFocus={() => { if (discountStr === '0') setDiscountStr(''); }}
+                      onBlur={() => { if (!discountStr.trim()) setDiscountStr('0'); }}
                       onChange={(e) => setDiscountStr(e.target.value)}
                       className="w-full px-3 py-1.5 text-sm font-mono-num border border-slate-300 rounded-lg"
                     />
