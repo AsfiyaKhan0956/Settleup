@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { db } from '../db.ts';
+import { todayYmd } from '../date.ts';
 import { getMembership, requireAuth, type AuthedRequest } from '../middleware.ts';
 import {
   calculateSplits,

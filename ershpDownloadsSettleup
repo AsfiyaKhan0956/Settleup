@@ -1,0 +1,36 @@
+warning: in the working copy of '.gitignore', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'SETUP_GUIDE.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'package-lock.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'package.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'server/db.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'server/routes/expenses.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'server/routes/groups.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'server/routes/manualBalances.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/App.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/components/analytics/AnalyticsView.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/components/groups/GroupWorkspaceView.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/components/groups/GroupsView.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/components/groups/GuestGroupView.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/components/layout/AppShell.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/components/public/PublicPages.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/types/index.ts', LF will be replaced by CRLF the next time Git touches it
+ .gitignore                                   |   12 [32m+[m
+ README.md                                    |    6 [32m+[m[31m-[m
+ SETUP_GUIDE.md                               |   34 [32m+[m[31m-[m
+ package-lock.json                            | 1630 [32m++++++++++++++++++++++++[m[31m--[m
+ package.json                                 |   12 [32m+[m[31m-[m
+ server/db.ts                                 |   75 [32m+[m[31m-[m
+ server/routes/expenses.ts                    |    1 [32m+[m
+ server/routes/groups.ts                      |  271 [32m++++[m[31m-[m
+ server/routes/manualBalances.ts              |    1 [32m+[m
+ src/App.tsx                                  |   18 [32m+[m[31m-[m
+ src/components/analytics/AnalyticsView.tsx   |    2 [32m+[m[31m-[m
+ src/components/groups/GroupWorkspaceView.tsx |  370 [32m+++[m[31m---[m
+ src/components/groups/GroupsView.tsx         |   22 [32m+[m[31m-[m
+ src/components/groups/GuestGroupView.tsx     |   32 [32m+[m[31m-[m
+ src/components/layout/AppShell.tsx           |    7 [32m+[m[31m-[m
+ src/components/public/PublicPages.tsx        |    2 [32m+[m[31m-[m
+ src/types/index.ts                           |    3 [32m+[m[31m-[m
+ vite.config.ts                               |   35 [32m+[m[31m-[m
+ 18 files changed, 2077 insertions(+), 456 deletions(-)

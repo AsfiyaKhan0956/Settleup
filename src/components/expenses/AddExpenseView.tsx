@@ -639,10 +639,7 @@ export const AddExpenseView: React.FC<AddExpenseViewProps> = ({
                           className="w-full px-3 py-1.5 text-sm font-mono-num border border-slate-300 rounded-lg bg-white"
                         />
                       </div>
-                      <div className="sm:col-span-2 flex items-center justify-between sm:justify-end gap-2">
-                        <span className="font-mono-num text-sm font-semibold text-slate-800">
-                          {formatINR(rupeesToPaise(item.unitPriceStr || '0') * Number(item.quantity || 1))}
-                        </span>
+                      <div className="sm:col-span-2 flex items-center justify-end">
                         {items.length > 1 && (
                           <button
                             type="button"
@@ -654,6 +651,11 @@ export const AddExpenseView: React.FC<AddExpenseViewProps> = ({
                           </button>
                         )}
                       </div>
+                    </div>
+                    <div className="flex justify-end rounded-lg border border-slate-200 bg-white px-3 py-2">
+                      <span className="font-mono-num text-sm font-semibold text-slate-800">
+                        {formatINR(rupeesToPaise(item.unitPriceStr || '0') * Number(item.quantity || 1))}
+                      </span>
                     </div>
 
                     <div>

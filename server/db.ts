@@ -119,6 +119,40 @@ export function initializeDatabase(): void {
     );
     CREATE INDEX IF NOT EXISTS idx_guest_sessions_expiry ON guest_sessions(expires_at);
 
+    CREATE TABLE IF NOT EXISTS guest_members (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      source_session_id INTEGER NOT NULL UNIQUE,
+      display_name TEXT NOT NULL CHECK (length(trim(display_name)) BETWEEN 1 AND 80),
+      linked_user_id INTEGER,
+      joined_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+      FOREIGN KEY (source_session_id) REFERENCES guest_sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (linked_user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_guest_members_group ON guest_members(group_id, joined_at);
+
+    CREATE TABLE IF NOT EXISTS email_invite_batches (
+      request_id TEXT PRIMARY KEY,
+      group_id INTEGER NOT NULL,
+      requested_by_user_id INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'sent', 'partial', 'failed')),
+      response_json TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+      FOREIGN KEY (requested_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS email_invite_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      request_id TEXT NOT NULL UNIQUE,
+      user_id INTEGER NOT NULL,
+      recipient_count INTEGER NOT NULL CHECK (recipient_count > 0),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_email_invite_usage_user_day ON email_invite_usage(user_id, created_at);
+
     CREATE TABLE IF NOT EXISTS expenses (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       group_id INTEGER NOT NULL,
@@ -435,7 +469,7 @@ export function initializeDatabase(): void {
   `);
 
   applyIncrementalMigrations();
-  db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (1), (2), (3)').run();
+  db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (1), (2), (3), (4)').run();
   if (process.env.SEED_DEMO_DATA === 'true') {
     seedDemoWorkspaceIfNeeded();
     seedDemoPersonalAndTripData();
@@ -443,6 +477,45 @@ export function initializeDatabase(): void {
 }
 
 function applyIncrementalMigrations(): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS guest_members (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      source_session_id INTEGER NOT NULL UNIQUE,
+      display_name TEXT NOT NULL CHECK (length(trim(display_name)) BETWEEN 1 AND 80),
+      linked_user_id INTEGER,
+      joined_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+      FOREIGN KEY (source_session_id) REFERENCES guest_sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (linked_user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_guest_members_group ON guest_members(group_id, joined_at);
+    CREATE TABLE IF NOT EXISTS email_invite_batches (
+      request_id TEXT PRIMARY KEY,
+      group_id INTEGER NOT NULL,
+      requested_by_user_id INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'sent', 'partial', 'failed')),
+      response_json TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+      FOREIGN KEY (requested_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS email_invite_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      request_id TEXT NOT NULL UNIQUE,
+      user_id INTEGER NOT NULL,
+      recipient_count INTEGER NOT NULL CHECK (recipient_count > 0),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_email_invite_usage_user_day ON email_invite_usage(user_id, created_at);
+  `);
+  const guestSessionCols = db.prepare('PRAGMA table_info(guest_sessions)').all() as Array<{ name: string }>;
+  if (!guestSessionCols.some((column) => column.name === 'guest_member_id')) {
+    db.exec('ALTER TABLE guest_sessions ADD COLUMN guest_member_id INTEGER REFERENCES guest_members(id) ON DELETE SET NULL;');
+  }
+
   const userCols = db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>;
   if (!userCols.some((c) => c.name === 'phone')) {
     db.exec(`ALTER TABLE users ADD COLUMN phone TEXT;`);

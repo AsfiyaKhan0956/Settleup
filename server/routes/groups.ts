@@ -1,12 +1,25 @@
 import { Router } from 'express';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import QRCode from 'qrcode';
 import { db } from '../db.ts';
 import { computeGroupBalances, getMembership, requireAuth, type AuthedRequest } from '../middleware.ts';
 import { createRateLimiter, generateOpaqueToken, hashToken, isValidEmail, normalizePhone } from '../security.ts';
-import { getPublicAppBaseUrl, isSmtpConfigured, isSmsConfigured, sendGroupInvitationEmail, sendGroupInvitationSms } from '../mailer.ts';
+import { isSmtpConfigured, isSmsConfigured, sendGroupInvitationEmail, sendGroupInvitationSms } from '../mailer.ts';
 
 export const groupsRouter = Router();
 const guestGroupViewLimiter = createRateLimiter(60_000, 60);
+const emailInviteLimiter = createRateLimiter(60_000, 5);
+
+function canonicalAppUrl(): string | null {
+  const configured = process.env.APP_URL?.trim() ?? '';
+  let parsed: URL;
+  try { parsed = new URL(configured); } catch { return null; }
+  const host = parsed.hostname.toLowerCase();
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash || host === 'localhost' || host.endsWith('.localhost') || host === '127.0.0.1' || host === '::1') {
+    return null;
+  }
+  return parsed.origin;
+}
 
 function parseSqliteUtcMs(ts: string): number {
   if (!ts) return 0;
@@ -203,7 +216,7 @@ groupsRouter.post('/', requireAuth, async (req: AuthedRequest, res) => {
           found.id,
           newGroupId,
           `${req.user!.fullName} invited you to join "${cleanName}". Would you like to join?`,
-          `/?invite=${token}`
+          `/guest-group?invite=${token}`
         );
       }
     }
@@ -221,15 +234,19 @@ groupsRouter.post('/', requireAuth, async (req: AuthedRequest, res) => {
     return newGroupId;
   })();
 
-  const baseUrl = getPublicAppBaseUrl(req);
+  const baseUrl = canonicalAppUrl();
   let emailsSentCount = 0;
   for (const item of pendingEmailTokens) {
+    if (!baseUrl) {
+      db.prepare("UPDATE invitations SET delivery_status = 'not_configured', delivery_error = 'Public APP_URL is not configured.' WHERE id = ?").run(item.inviteId);
+      continue;
+    }
     const emailRes = await sendGroupInvitationEmail({
       toEmail: item.email,
       groupName: cleanName,
       groupDescription: (description ?? '').trim(),
       inviterName: req.user!.fullName,
-      inviteUrl: `${baseUrl}/?invite=${item.token}`,
+      inviteUrl: `${baseUrl}/guest-group?invite=${item.token}`,
       expiresInDays: 14,
     });
     if (emailRes.delivered) emailsSentCount += 1;
@@ -244,6 +261,7 @@ groupsRouter.post('/', requireAuth, async (req: AuthedRequest, res) => {
     groupId,
     invitedCount: pendingEmailTokens.length,
     emailsSentCount,
+    emailSetupError: pendingEmailTokens.length && !baseUrl ? 'Public APP_URL is not configured; invitations were created but not emailed.' : null,
     smtpConfigured: isSmtpConfigured(),
   });
 });
@@ -327,21 +345,39 @@ function setGuestSessionCookie(req: import('express').Request, res: import('expr
   res.cookie('settleup_guest_sid', rawToken, {
     httpOnly: true,
     secure,
-    sameSite: secure ? 'none' : 'lax',
-    path: '/api/groups/guest-session',
+    sameSite: 'lax',
+    path: '/api/groups',
     maxAge: maxAgeMs,
   });
 }
 
 function clearGuestSessionCookie(req: import('express').Request, res: import('express').Response): void {
   const secure = Boolean(req.secure || process.env.NODE_ENV === 'production');
-  res.clearCookie('settleup_guest_sid', { httpOnly: true, secure, sameSite: secure ? 'none' : 'lax', path: '/api/groups/guest-session' });
+  res.clearCookie('settleup_guest_sid', { httpOnly: true, secure, sameSite: 'lax', path: '/api/groups' });
 }
 
-function buildGuestGroupPayload(groupId: number) {
+function activeGuestSession(rawToken: string) {
+  return db.prepare(`
+    SELECT gs.id, gs.group_id, gs.invitation_id, gs.guest_member_id
+    FROM guest_sessions gs
+    JOIN invitations i ON i.id = gs.invitation_id AND i.group_id = gs.group_id
+    JOIN groups g ON g.id = gs.group_id
+    WHERE gs.token_hash = ? AND datetime(gs.expires_at) > datetime('now')
+      AND i.status = 'pending' AND i.use_count < i.max_uses AND datetime(i.expires_at) > datetime('now')
+  `).get(hashToken(rawToken)) as { id: number; group_id: number; invitation_id: number; guest_member_id: number | null } | undefined;
+}
+
+function buildGuestGroupPayload(groupId: number, guestMemberId: number | null = null) {
   const group = db.prepare('SELECT id, name, description, category FROM groups WHERE id = ?').get(groupId) as { id: number; name: string; description: string; category: string } | undefined;
   if (!group) return null;
-  const members = db.prepare(`SELECT u.id, u.full_name, gm.role, gm.joined_at FROM group_members gm JOIN users u ON u.id = gm.user_id WHERE gm.group_id = ? ORDER BY gm.joined_at, u.id`).all(groupId);
+  const members = db.prepare(`
+    SELECT u.id, u.full_name, gm.role, gm.joined_at, 0 AS is_guest
+    FROM group_members gm JOIN users u ON u.id = gm.user_id WHERE gm.group_id = ?
+    UNION ALL
+    SELECT -guest.id AS id, guest.display_name AS full_name, 'guest' AS role, guest.joined_at, 1 AS is_guest
+    FROM guest_members guest WHERE guest.group_id = ? AND guest.linked_user_id IS NULL
+    ORDER BY joined_at, id
+  `).all(groupId, groupId);
   const expenses = db.prepare(`SELECT e.id, e.title, e.description, e.notes, e.category, e.split_method, e.total_paise, e.expense_date, payer.full_name AS payer_name, creator.full_name AS creator_name FROM expenses e JOIN users payer ON payer.id = e.paid_by_user_id JOIN users creator ON creator.id = e.created_by_user_id WHERE e.group_id = ? ORDER BY e.expense_date DESC, e.id DESC`).all(groupId) as Array<{ id: number; title: string; description: string; notes: string; category: string; split_method: string; total_paise: number; expense_date: string; payer_name: string; creator_name: string }>;
   const detailedExpenses = expenses.map((expense) => ({
     ...expense,
@@ -351,10 +387,14 @@ function buildGuestGroupPayload(groupId: number) {
   const settlements = db.prepare(`SELECT s.id, s.amount_paise, s.status, s.created_at, payer.full_name AS payer_name, receiver.full_name AS receiver_name FROM settlements s JOIN users payer ON payer.id = s.payer_user_id JOIN users receiver ON receiver.id = s.receiver_user_id WHERE s.group_id = ? ORDER BY s.created_at DESC, s.id DESC`).all(groupId);
   const activity = db.prepare(`SELECT a.action, a.entity_type, a.summary, a.created_at, u.full_name AS actor_name FROM activity_logs a JOIN users u ON u.id = a.user_id WHERE a.group_id = ? ORDER BY a.created_at DESC, a.id DESC LIMIT 30`).all(groupId);
   const balances = computeGroupBalances(groupId);
+  const guestBalances = (members as Array<{ id: number; full_name: string; is_guest: number }>).filter((member) => member.is_guest).map((member) => ({
+    fullName: member.full_name, paidPaise: 0, owedPaise: 0, netPaise: 0,
+  }));
   const categoryTotals = db.prepare(`SELECT category, SUM(total_paise) AS total_paise FROM expenses WHERE group_id = ? GROUP BY category ORDER BY total_paise DESC`).all(groupId);
+  const guestMember = guestMemberId ? db.prepare('SELECT display_name FROM guest_members WHERE id = ? AND group_id = ? AND linked_user_id IS NULL').get(guestMemberId, groupId) as { display_name: string } | undefined : undefined;
   return {
-    group, members, expenses: detailedExpenses,
-    balances: { members: balances.members.map((member) => ({ fullName: member.fullName, paidPaise: member.paidPaise, owedPaise: member.owedPaise, netPaise: member.netPaise })), transfers: balances.transfers.map((transfer) => ({ fromName: transfer.fromName, toName: transfer.toName, amountPaise: transfer.amountPaise })), totalExpenditurePaise: balances.totalExpenditurePaise, confirmedSettledPaise: balances.confirmedSettledPaise },
+    group, members, guestMember: guestMember ? { name: guestMember.display_name } : null, expenses: detailedExpenses,
+    balances: { members: [...balances.members.map((member) => ({ fullName: member.fullName, paidPaise: member.paidPaise, owedPaise: member.owedPaise, netPaise: member.netPaise })), ...guestBalances], transfers: balances.transfers.map((transfer) => ({ fromName: transfer.fromName, toName: transfer.toName, amountPaise: transfer.amountPaise })), totalExpenditurePaise: balances.totalExpenditurePaise, confirmedSettledPaise: balances.confirmedSettledPaise },
     settlements, activity, analytics: { expenseCount: expenses.length, categoryTotals }, readOnly: true as const,
   };
 }
@@ -366,6 +406,12 @@ groupsRouter.post('/invite/:token/guest-session', guestGroupViewLimiter, (req, r
     res.status(403).json({ error: 'This guest invitation is invalid, expired, revoked, or already used.' });
     return;
   }
+  const currentToken = (req.cookies as Record<string, string> | undefined)?.settleup_guest_sid;
+  if (currentToken) {
+    const current = db.prepare(`SELECT id FROM guest_sessions WHERE token_hash = ? AND invitation_id = ? AND group_id = ? AND datetime(expires_at) > datetime('now')`)
+      .get(hashToken(currentToken), invitation.id, invitation.group_id);
+    if (current) { res.setHeader('Cache-Control', 'no-store'); res.json({ ok: true }); return; }
+  }
   const rawSessionToken = generateOpaqueToken(32);
   const expiryMs = Math.min(Date.now() + 12 * 60 * 60 * 1000, parseSqliteUtcMs(invitation.expires_at));
   const expirySql = new Date(expiryMs).toISOString().slice(0, 19).replace('T', ' ');
@@ -376,24 +422,61 @@ groupsRouter.post('/invite/:token/guest-session', guestGroupViewLimiter, (req, r
   res.json({ ok: true, expiresAt: expirySql });
 });
 
+groupsRouter.post('/guest-session/join', guestGroupViewLimiter, (req, res) => {
+  const rawToken = (req.cookies as Record<string, string> | undefined)?.settleup_guest_sid;
+  const session = rawToken ? activeGuestSession(rawToken) : undefined;
+  if (!session) { res.status(410).json({ error: 'This guest invitation has expired or is no longer available. Reopen a valid invitation.' }); return; }
+  const cleanName = String((req.body as { name?: unknown }).name ?? '').trim().replace(/\s+/g, ' ');
+  if (cleanName.length < 2 || cleanName.length > 80 || /[<>\u0000-\u001f\u007f]/.test(cleanName)) {
+    res.status(400).json({ error: 'Enter a name between 2 and 80 characters.' });
+    return;
+  }
+  db.transaction(() => {
+    db.prepare(`INSERT INTO guest_members (group_id, source_session_id, display_name)
+      SELECT group_id, id, ? FROM guest_sessions WHERE id = ? AND guest_member_id IS NULL
+      ON CONFLICT(source_session_id) DO NOTHING`).run(cleanName, session.id);
+    db.prepare(`UPDATE guest_sessions SET guest_member_id = (SELECT id FROM guest_members WHERE source_session_id = ?)
+      WHERE id = ? AND guest_member_id IS NULL`).run(session.id, session.id);
+  })();
+  const member = db.prepare('SELECT id, display_name FROM guest_members WHERE source_session_id = ?').get(session.id) as { id: number; display_name: string } | undefined;
+  if (!member) { res.status(409).json({ error: 'Unable to join this group. Reopen the invitation and try again.' }); return; }
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ ok: true, groupId: session.group_id, guest: { id: member.id, name: member.display_name } });
+});
+
 groupsRouter.get('/guest-session/view', guestGroupViewLimiter, (req, res) => {
   const rawToken = (req.cookies as Record<string, string> | undefined)?.settleup_guest_sid;
   if (!rawToken) { res.status(401).json({ error: 'Guest session is missing. Reopen your invitation link.' }); return; }
-  const session = db.prepare(`
-    SELECT gs.group_id
-    FROM guest_sessions gs JOIN invitations i ON i.id = gs.invitation_id
-    WHERE gs.token_hash = ? AND datetime(gs.expires_at) > datetime('now')
-      AND i.status = 'pending' AND i.use_count < i.max_uses AND datetime(i.expires_at) > datetime('now')
-  `).get(hashToken(rawToken)) as { group_id: number } | undefined;
+  const session = activeGuestSession(rawToken);
   if (!session) {
     clearGuestSessionCookie(req, res);
     res.status(401).json({ error: 'Guest access has expired or the invitation was revoked.' });
     return;
   }
-  const payload = buildGuestGroupPayload(session.group_id);
+  const payload = buildGuestGroupPayload(session.group_id, session.guest_member_id);
   if (!payload) { clearGuestSessionCookie(req, res); res.status(404).json({ error: 'The invited group no longer exists.' }); return; }
   res.setHeader('Cache-Control', 'no-store');
   res.json(payload);
+});
+
+groupsRouter.post('/guest-session/convert', requireAuth, (req: AuthedRequest, res) => {
+  const rawToken = (req.cookies as Record<string, string> | undefined)?.settleup_guest_sid;
+  const session = rawToken ? activeGuestSession(rawToken) : undefined;
+  if (!session?.guest_member_id) { res.status(404).json({ error: 'No joined guest membership is available to convert.' }); return; }
+  const guest = db.prepare('SELECT id, group_id, linked_user_id FROM guest_members WHERE id = ?').get(session.guest_member_id) as { id: number; group_id: number; linked_user_id: number | null } | undefined;
+  if (!guest || guest.group_id !== session.group_id) { res.status(410).json({ error: 'Guest membership is no longer available.' }); return; }
+  if (guest.linked_user_id && guest.linked_user_id !== req.user!.id) { res.status(409).json({ error: 'This guest identity is already linked to another account.' }); return; }
+  const existing = getMembership(session.group_id, req.user!.id);
+  db.transaction(() => {
+    db.prepare("INSERT OR IGNORE INTO group_members (group_id, user_id, role) VALUES (?, ?, 'member')").run(session.group_id, req.user!.id);
+    db.prepare('UPDATE guest_members SET linked_user_id = ? WHERE id = ? AND group_id = ? AND (linked_user_id IS NULL OR linked_user_id = ?)')
+      .run(req.user!.id, guest.id, session.group_id, req.user!.id);
+  })();
+  const linked = db.prepare('SELECT linked_user_id FROM guest_members WHERE id = ? AND group_id = ?').get(guest.id, session.group_id) as { linked_user_id: number | null } | undefined;
+  if (linked?.linked_user_id !== req.user!.id) { res.status(409).json({ error: 'Unable to link this guest identity to your account.' }); return; }
+  clearGuestSessionCookie(req, res);
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ ok: true, groupId: session.group_id, alreadyMember: Boolean(existing) });
 });
 
 groupsRouter.post('/invite/:token/accept', requireAuth, (req: AuthedRequest, res) => {
@@ -598,14 +681,14 @@ groupsRouter.get('/:id', requireAuth, async (req: AuthedRequest, res) => {
   }>;
 
   const nowMs = Date.now();
-  const baseUrl = getPublicAppBaseUrl(req);
+  const baseUrl = canonicalAppUrl();
   const invitations = rawInvitations.map((inv) => {
     const expired = inv.status === 'pending' && parseSqliteUtcMs(inv.expires_at) <= nowMs;
     const effectiveStatus = expired ? 'expired' : inv.status;
     return {
       ...inv,
       status: effectiveStatus,
-      inviteUrl: `${baseUrl}/?invite=${inv.token}`,
+      inviteUrl: baseUrl ? `${baseUrl}/guest-group?invite=${inv.token}` : null,
     };
   });
 
@@ -614,11 +697,12 @@ groupsRouter.get('/:id', requireAuth, async (req: AuthedRequest, res) => {
       inv.status === 'pending' &&
       !inv.invitee_email &&
       !inv.invitee_phone &&
+      Boolean(inv.inviteUrl) &&
       inv.use_count < inv.max_uses
   );
 
   const inviteQrDataUrl = activeQrInvite
-    ? await QRCode.toDataURL(activeQrInvite.inviteUrl, {
+    ? await QRCode.toDataURL(activeQrInvite.inviteUrl!, {
         width: 260,
         margin: 1,
         color: { dark: '#0F172A', light: '#FFFFFF' },
@@ -647,6 +731,23 @@ groupsRouter.get('/:id', requireAuth, async (req: AuthedRequest, res) => {
     `)
     .all(groupId);
 
+  const guestMemberRows = db.prepare(`SELECT id, display_name, joined_at FROM guest_members
+    WHERE group_id = ? AND linked_user_id IS NULL ORDER BY joined_at, id`).all(groupId) as Array<{ id: number; display_name: string; joined_at: string }>;
+  const workspaceMembers = [
+    ...members.map((member) => ({
+      ...member,
+      role: roleMap.get(member.userId)?.role ?? 'member',
+      joinedAt: roleMap.get(member.userId)?.joined_at ?? '',
+      isGuest: false,
+    })),
+    ...guestMemberRows.map((member) => ({
+      userId: -member.id, fullName: member.display_name, email: '', upiId: null, avatarUrl: null,
+      role: 'guest', isGuest: true, joinedAt: member.joined_at,
+      paidPaise: 0, owedPaise: 0, netPaise: 0,
+      settlementsPaidPaise: 0, settlementsReceivedPaise: 0, pendingIncomingPaise: 0,
+    })),
+  ];
+
   res.json({
     group: {
       id: group.id,
@@ -660,11 +761,7 @@ groupsRouter.get('/:id', requireAuth, async (req: AuthedRequest, res) => {
       totalExpenditurePaise,
       confirmedSettledPaise,
     },
-    members: members.map((m) => ({
-      ...m,
-      role: roleMap.get(m.userId)?.role ?? 'member',
-      joinedAt: roleMap.get(m.userId)?.joined_at ?? '',
-    })),
+    members: workspaceMembers,
     transfers,
     expenses,
     invitations,
@@ -801,6 +898,12 @@ groupsRouter.post('/:id/members', requireAuth, async (req: AuthedRequest, res) =
     return;
   }
 
+  const baseUrl = canonicalAppUrl();
+  if (!baseUrl) {
+    res.status(503).json({ error: 'Public APP_URL is not configured. Set it to the verified Cloudflare HTTPS origin before generating invitation links.' });
+    return;
+  }
+
   const duplicate = db
     .prepare(`
       SELECT id, token, expires_at FROM invitations
@@ -820,8 +923,7 @@ groupsRouter.post('/:id/members', requireAuth, async (req: AuthedRequest, res) =
   if (duplicate) db.prepare("UPDATE invitations SET expires_at = datetime('now', '+14 days') WHERE id = ?").run(inviteId);
   const inviteExpiresInDays = 14;
 
-  const baseUrl = getPublicAppBaseUrl(req);
-  const inviteUrl = `${baseUrl}/?invite=${token}`;
+  const inviteUrl = `${baseUrl}/guest-group?invite=${token}`;
   const emailResult = await sendGroupInvitationEmail({
     toEmail: cleanEmail,
     groupName: group.name,
@@ -918,6 +1020,114 @@ groupsRouter.delete('/:id/members/:memberId', requireAuth, (req: AuthedRequest, 
   res.json({ ok: true });
 });
 
+groupsRouter.post('/:id/invitations/email', requireAuth, emailInviteLimiter, async (req: AuthedRequest, res) => {
+  const groupId = Number(req.params.id);
+  const userId = req.user!.id;
+  const expectedOrigin = `${req.protocol}://${req.get('host')}`;
+  if (!req.get('origin') || req.get('origin') !== expectedOrigin) { res.status(403).json({ error: 'Request origin could not be verified.' }); return; }
+  const recipientsValue = (req.body as { recipients?: unknown }).recipients;
+  if (!Array.isArray(recipientsValue) || recipientsValue.length < 1 || recipientsValue.length > 5) {
+    res.status(400).json({ error: 'Enter between 1 and 5 recipient addresses.' }); return;
+  }
+  const recipients = recipientsValue.map((email) => String(email ?? '').trim().toLowerCase());
+  if (recipients.some((email) => email.length > 254 || !isValidEmail(email))) { res.status(400).json({ error: 'One or more recipient email addresses are invalid.' }); return; }
+  if (new Set(recipients).size !== recipients.length) { res.status(400).json({ error: 'Remove duplicate recipient addresses before sending.' }); return; }
+  const requestId = String((req.body as { requestId?: unknown }).requestId ?? '');
+  if (!/^[a-zA-Z0-9_-]{16,80}$/.test(requestId)) { res.status(400).json({ error: 'Refresh the invitation form and try again.' }); return; }
+  const canonical = canonicalAppUrl();
+  if (!canonical) { res.status(503).json({ error: 'Set APP_URL to the verified public HTTPS origin before sending invitations.' }); return; }
+  const scriptUrl = process.env.APPS_SCRIPT_URL?.trim() ?? '';
+  try {
+    const parsed = new URL(scriptUrl);
+    if (parsed.protocol !== 'https:' || parsed.hostname !== 'script.google.com' || !/^\/macros\/s\/[^/]+\/exec\/?$/.test(parsed.pathname)) throw new Error();
+  } catch { res.status(503).json({ error: 'Email delivery is not configured. Set the Apps Script web app endpoint.' }); return; }
+  const secret = process.env.EMAIL_INTEGRATION_SECRET ?? '';
+  if (secret.length < 32) { res.status(503).json({ error: 'Email delivery is not configured. Set the Worker integration secret.' }); return; }
+  if (!getMembership(groupId, userId)) { res.status(403).json({ error: 'You must be a registered group member to send invitations.' }); return; }
+  const group = db.prepare('SELECT id, name FROM groups WHERE id = ?').get(groupId) as { id: number; name: string } | undefined;
+  if (!group) { res.status(404).json({ error: 'Group not found.' }); return; }
+  const previous = db.prepare('SELECT group_id, requested_by_user_id, response_json FROM email_invite_batches WHERE request_id = ?').get(requestId) as { group_id: number; requested_by_user_id: number; response_json: string | null } | undefined;
+  if (previous) {
+    if (previous.group_id !== groupId || previous.requested_by_user_id !== userId) { res.status(409).json({ error: 'This request identifier is already in use.' }); return; }
+    if (previous.response_json) { res.json(JSON.parse(previous.response_json)); return; }
+    res.status(409).json({ error: 'This invitation request is still being processed.' }); return;
+  }
+
+  type PendingMailInvite = { id: number; email: string; token: string };
+  let invites: PendingMailInvite[];
+  try {
+    invites = db.transaction(() => {
+      const used = db.prepare("SELECT COALESCE(SUM(recipient_count), 0) AS total FROM email_invite_usage WHERE user_id = ? AND date(created_at) = date('now')").get(userId) as { total: number };
+      if (Number(used.total) + recipients.length > 50) throw new Error('DAILY_LIMIT');
+      db.prepare('INSERT INTO email_invite_usage (request_id, user_id, recipient_count) VALUES (?, ?, ?)').run(requestId, userId, recipients.length);
+      db.prepare("INSERT INTO email_invite_batches (request_id, group_id, requested_by_user_id, status) VALUES (?, ?, ?, 'pending')").run(requestId, groupId, userId);
+      const expiresAt = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 19).replace('T', ' ');
+      const results: PendingMailInvite[] = [];
+      for (const email of recipients) {
+        const existing = db.prepare(`SELECT id, token FROM invitations WHERE group_id = ? AND lower(COALESCE(invitee_email, '')) = ?
+          AND status = 'pending' AND use_count < max_uses AND datetime(expires_at) > datetime('now')
+          ORDER BY created_at DESC, id DESC LIMIT 1`).get(groupId, email) as { id: number; token: string } | undefined;
+        if (existing) {
+          db.prepare("UPDATE invitations SET channel = 'email', expires_at = ?, delivery_status = 'pending', delivery_error = NULL WHERE id = ?").run(expiresAt, existing.id);
+          results.push({ id: existing.id, email, token: existing.token });
+        } else {
+          const token = generateOpaqueToken(32);
+          const id = Number(db.prepare(`INSERT INTO invitations
+            (group_id, invited_by, invitee_email, channel, token, status, delivery_status, max_uses, expires_at, last_sent_at)
+            VALUES (?, ?, ?, 'email', ?, 'pending', 'pending', 1, ?, datetime('now'))`).run(groupId, userId, email, token, expiresAt).lastInsertRowid);
+          results.push({ id, email, token });
+        }
+      }
+      return results;
+    })();
+  } catch (error) {
+    if (error instanceof Error && error.message === 'DAILY_LIMIT') { res.status(429).json({ error: 'Daily invitation limit reached (maximum 50 recipients per account).' }); return; }
+    res.status(500).json({ error: 'Could not prepare the invitation request.' }); return;
+  }
+
+  const payloadJson = JSON.stringify({
+    senderName: req.user!.fullName.slice(0, 120), groupName: group.name.slice(0, 120),
+    invitations: invites.map(({ email, token }) => ({ email, url: `${canonical}/guest-group?invite=${encodeURIComponent(token)}` }))
+  });
+  const timestamp = String(Date.now());
+  const nonce = randomBytes(24).toString('hex');
+  const signed = `${timestamp}\n${nonce}\n${requestId}\n${payloadJson}`;
+  const signature = createHmac('sha256', secret).update(signed, 'utf8').digest('hex');
+  let delivery: any;
+  try {
+    const result = await fetch(scriptUrl, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ timestamp, nonce, requestId, payload: payloadJson, signature }),
+      redirect: 'follow', signal: AbortSignal.timeout(20_000),
+    });
+    const text = await result.text();
+    if (text.length > 16000) throw new Error('Oversized response');
+    delivery = JSON.parse(text);
+    if (!result.ok || !Array.isArray(delivery.results)) throw new Error('Unconfirmed delivery');
+  } catch {
+    const failedIndexes = invites.map((_, index) => index);
+    const failedResults = failedIndexes.map((index) => ({ index, ok: false, error: 'delivery_unconfirmed' }));
+    const safe = { ok: false, sentCount: 0, failedIndexes, results: failedResults, requestId, error: 'Email delivery could not be confirmed. Check status before creating a new request.' };
+    db.transaction(() => {
+      for (const invite of invites) db.prepare("UPDATE invitations SET delivery_status = 'failed', delivery_error = 'Email delivery could not be confirmed.' WHERE id = ?").run(invite.id);
+      db.prepare("UPDATE email_invite_batches SET status = 'failed', response_json = ?, updated_at = datetime('now') WHERE request_id = ?").run(JSON.stringify(safe), requestId);
+    })();
+    res.status(502).json(safe); return;
+  }
+  const results = invites.map((_, index) => {
+    const row = delivery.results.find((item: any) => Number(item.index) === index);
+    return { index, ok: Boolean(row?.ok), error: row?.ok ? undefined : String(row?.error ?? 'send_failed').slice(0, 180) };
+  });
+  const sentCount = results.filter((item) => item.ok).length;
+  const failedIndexes = results.filter((item) => !item.ok).map((item) => item.index);
+  const safe = { ok: failedIndexes.length === 0, sentCount, failedIndexes, results, requestId };
+  db.transaction(() => {
+    for (const [index, invite] of invites.entries()) db.prepare('UPDATE invitations SET delivery_status = ?, delivery_error = ? WHERE id = ?').run(results[index].ok ? 'sent' : 'failed', results[index].ok ? null : results[index].error, invite.id);
+    db.prepare('UPDATE email_invite_batches SET status = ?, response_json = ?, updated_at = datetime(\'now\') WHERE request_id = ?').run(failedIndexes.length === 0 ? 'sent' : sentCount ? 'partial' : 'failed', JSON.stringify(safe), requestId);
+  })();
+  res.json(safe);
+});
+
 groupsRouter.post('/:id/invitations', requireAuth, async (req: AuthedRequest, res) => {
   const groupId = Number(req.params.id);
   const membership = getMembership(groupId, req.user!.id);
@@ -946,7 +1156,11 @@ groupsRouter.post('/:id/invitations', requireAuth, async (req: AuthedRequest, re
   const validChannels = ['qr', 'email', 'whatsapp', 'phone', 'link'] as const;
   const cleanChannel = validChannels.includes(channel) ? channel : 'qr';
   const days = Math.min(90, Math.max(1, Number(expiresInDays ?? 14) || 14));
-  const baseUrl = getPublicAppBaseUrl(req);
+  const baseUrl = canonicalAppUrl();
+  if (!baseUrl) {
+    res.status(503).json({ error: 'Public APP_URL is not configured. Set it to the verified Cloudflare HTTPS origin before generating invitation links.' });
+    return;
+  }
 
   if (cleanChannel === 'email') {
     const cleanEmail = (inviteeEmail ?? '').trim().toLowerCase();
@@ -982,7 +1196,7 @@ groupsRouter.post('/:id/invitations', requireAuth, async (req: AuthedRequest, re
     if (duplicate) db.prepare("UPDATE invitations SET expires_at = datetime('now', '+' || ? || ' days') WHERE id = ?").run(days, inviteId);
     const inviteExpiresInDays = days;
 
-    const inviteUrl = `${baseUrl}/?invite=${token}`;
+    const inviteUrl = `${baseUrl}/guest-group?invite=${token}`;
     const emailResult = await sendGroupInvitationEmail({
       toEmail: cleanEmail,
       groupName: group.name,
@@ -1006,7 +1220,7 @@ groupsRouter.post('/:id/invitations', requireAuth, async (req: AuthedRequest, re
         existingUser.id,
         groupId,
         `${req.user!.fullName} invited you to join "${group.name}". Would you like to join?`,
-        `/?invite=${token}`
+        `/guest-group?invite=${token}`
       );
     }
 
@@ -1066,7 +1280,7 @@ groupsRouter.post('/:id/invitations', requireAuth, async (req: AuthedRequest, re
     );
 
     if (duplicate) db.prepare("UPDATE invitations SET expires_at = datetime('now', '+' || ? || ' days') WHERE id = ?").run(days, inviteId);
-    const inviteUrl = `${baseUrl}/?invite=${token}`;
+    const inviteUrl = `${baseUrl}/guest-group?invite=${token}`;
 
     let smsDelivered = false;
     let deliveryStatus: 'sent' | 'not_configured' | 'failed' | 'manual_share' = 'manual_share';
@@ -1098,7 +1312,7 @@ groupsRouter.post('/:id/invitations', requireAuth, async (req: AuthedRequest, re
         matchedUser.id,
         groupId,
         `${req.user!.fullName} invited you to join "${group.name}". Would you like to join?`,
-        `/?invite=${token}`
+        `/guest-group?invite=${token}`
       );
     }
 
@@ -1144,7 +1358,7 @@ groupsRouter.post('/:id/invitations', requireAuth, async (req: AuthedRequest, re
       .get(groupId) as { id: number; token: string; channel: string } | undefined;
 
     if (existingActive) {
-      const inviteUrl = `${baseUrl}/?invite=${existingActive.token}`;
+      const inviteUrl = `${baseUrl}/guest-group?invite=${existingActive.token}`;
       const qrDataUrl = await QRCode.toDataURL(inviteUrl, {
         width: 260,
         margin: 1,
@@ -1173,7 +1387,7 @@ groupsRouter.post('/:id/invitations', requireAuth, async (req: AuthedRequest, re
       .run(groupId, req.user!.id, cleanChannel, token, maxUses, days).lastInsertRowid
   );
 
-  const inviteUrl = `${baseUrl}/?invite=${token}`;
+  const inviteUrl = `${baseUrl}/guest-group?invite=${token}`;
   const qrDataUrl = await QRCode.toDataURL(inviteUrl, {
     width: 260,
     margin: 1,
@@ -1228,8 +1442,13 @@ groupsRouter.post('/:id/invitations/:inviteId/resend', requireAuth, async (req: 
     return;
   }
 
-  const baseUrl = getPublicAppBaseUrl(req);
-  const inviteUrl = `${baseUrl}/?invite=${inv.token}`;
+  const baseUrl = canonicalAppUrl();
+  if (!baseUrl) {
+    res.status(503).json({ error: 'Public APP_URL is not configured. Set it to the verified Cloudflare HTTPS origin before resending invitations.' });
+    return;
+  }
+
+  const inviteUrl = `${baseUrl}/guest-group?invite=${inv.token}`;
 
   if (inv.invitee_email) {
     const emailResult = await sendGroupInvitationEmail({
