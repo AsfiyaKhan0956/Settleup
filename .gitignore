@@ -16,3 +16,15 @@ coverage/
 *.backup-*.db
 *.sqlite-wal
 *.sqlite-shm
+
+# Local backups and exported production data
+/backups/
+/cloudflare-backup.sql
+/cloudflare-import.sql
+/cloudflare-local-data.json
+
+# Wrangler local files and development secrets
+.wrangler/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example

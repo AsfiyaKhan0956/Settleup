@@ -7,7 +7,7 @@ SettleUp is a full-stack group expense management web application featuring **it
 - **Zero Floating-Point Drift**: All monetary calculations run in integer paise (`100 paise = ₹1 INR`) using Hamilton Largest-Remainder allocation.
 - **Debt Simplification**: Minimizes transfers across group members (`≤ N − 1` payments) without altering historical expenses.
 - **Trip Ledger**: Create an independent trip with two default participants, add people later, allocate each bill item to its actual consumers, record different payers, and track settlements. No invitations or participant accounts are required.
-- **Group Invitations**: Expiring email, QR, SMS and WhatsApp share links. SMTP is required for actual email delivery and Twilio for automated SMS; WhatsApp opens a prefilled message for the user to send.
+- **Group Invitations**: Expiring links shared by QR and user-confirmed WhatsApp, with authenticated send-only Gmail delivery through Google Apps Script for the Cloudflare Worker.
 - **Read-only Guest View**: Valid invitation links can create a short-lived HTTP-only guest session scoped to one group. Guests can view group expenses, balances, analytics and settlement history but cannot make changes.
 - **CSV Safety**: All CSV exports use `DD-MM-YYYY` dates, UTF-8 BOM, formula-injection protection and consistent line endings.
 - **Honest UPI QR Workflow**: Generates standard `upi://pay?...` QR codes and separates `recorded` payments from `confirmed` receipts.
@@ -31,9 +31,9 @@ SettleUp is a full-stack group expense management web application featuring **it
 - `SEED_DEMO_DATA` defaults to `false`. Set it to `true` before first initialization only if you intentionally want sample/demo users and data. Do not enable demo data on a live production installation.
 
 ## Email and SMS configuration
-The HTML email templates for group invitations and password resets are already included in `server/mailer.ts`; no separate HTML file is needed. Configure SMTP in `.env` (`SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`) to send real email. Configure Twilio (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`) for automated SMS. WhatsApp remains a user-initiated share link. Keep all provider secrets in your private `.env` file or hosting secret settings; never add `.env` to the ZIP or share it in chat.
+Cloudflare group invitation emails use the send-only Google Apps Script integration described in [`docs/CLOUDFLARE_GUEST_EMAIL_SETUP.md`](docs/CLOUDFLARE_GUEST_EMAIL_SETUP.md). The Express/SQLite local backend retains its existing mailer configuration for its current flows. Existing Twilio SMS settings remain optional; WhatsApp is user-initiated. Keep credentials in private local or hosting secret settings, never in source or the output ZIP.
 
-For production, also set a random `SESSION_SECRET` (at least 32 characters), a public HTTPS origin-only `APP_URL`, and persistent disk storage for `DB_PATH`. `GEMINI_API_KEY` is optional for the AI Help Assistant.
+For production, set the Worker `SESSION_SECRET` as a secret and verify `CANONICAL_APP_URL` is the stable public HTTPS origin. The Express backend uses `APP_URL`; never set either value to localhost or a preview URL. `GEMINI_API_KEY` is optional for the AI Help Assistant.
 
 ## Testing on a Phone
 

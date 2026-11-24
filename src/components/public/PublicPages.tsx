@@ -27,7 +27,7 @@ const HELP_ARTICLES = [
   {
     category: 'Groups & Invitations',
     title: 'Sharing Group Invite Links & QR Codes Safely',
-    body: 'Open any Group Workspace -> Members & Invites to generate an expiring invite token and scannable QR code. Invitees can open the link in read-only Guest View to see group expenses, balances, analytics, and settlement history without registering. To join and make changes, they must sign in or create an account and accept the invitation. Group admins can revoke tokens anytime.',
+    body: 'Open any Group Workspace -> Members & Invites to generate an expiring invite token and scannable QR code. Invitees can open the link, enter a name, and join as a read-only guest to see group expenses, balances, analytics, and settlement history without registering. Create an account or log in to participate and make changes. Group admins can revoke tokens anytime.',
   },
 ];
 

@@ -95,9 +95,6 @@ export const GroupsView: React.FC<GroupsViewProps> = ({
 
       const res = await apiRequest<{
         groupId: number;
-        invitedCount?: number;
-        emailsSentCount?: number;
-        smtpConfigured?: boolean;
       }>('/api/groups', {
         method: 'POST',
         body: JSON.stringify({
@@ -105,21 +102,22 @@ export const GroupsView: React.FC<GroupsViewProps> = ({
           description: newDesc.trim(),
           category: newCategory,
           coverColor: newColor,
-          memberEmails,
         }),
       });
       setCreateOpen(false);
       setNewName('');
       setNewDesc('');
       setInviteEmailsRaw('');
-      if (res.invitedCount && res.invitedCount > 0) {
-        if (res.emailsSentCount === res.invitedCount) {
-          onToast?.(`Group created and ${res.emailsSentCount} invitation email(s) sent.`, 'success');
-        } else if (!res.smtpConfigured) {
-          onToast?.(
-            `Group created with ${res.invitedCount} pending invite(s). Share their links in Members & Invites (SMTP email not configured).`,
-            'success'
-          );
+      if (memberEmails.length) {
+        try {
+          const delivery = await apiRequest<{ ok: boolean; sentCount: number; failedIndexes: number[] }>(`/api/groups/${res.groupId}/invitations/email`, {
+            method: 'POST',
+            body: JSON.stringify({ recipients: memberEmails, requestId: crypto.randomUUID().replaceAll('-', '') }),
+          });
+          const failed = delivery.failedIndexes.map((index) => memberEmails[index]).filter(Boolean);
+          onToast?.(delivery.ok ? `Group created and invitations sent to ${delivery.sentCount} recipient(s).` : `Group created; email failed for ${failed.join(', ') || 'one or more recipients'}.`, delivery.ok ? 'success' : 'error');
+        } catch (emailError) {
+          onToast?.(emailError instanceof Error ? `Group created, but invitation email failed: ${emailError.message}` : 'Group created, but invitation email could not be confirmed.', 'error');
         }
       }
       onSelectGroup(res.groupId);

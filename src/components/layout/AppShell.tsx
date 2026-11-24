@@ -40,6 +40,12 @@ const NAV_SECTIONS: Array<{
     ],
   },
   {
+    title: 'Quick Tools',
+    items: [
+      { route: '/trip-ledger', label: 'Quick Split', icon: Users },
+    ],
+  },
+  {
     title: 'Groups & Shared Bills',
     items: [
       { route: '/dashboard', label: 'Overview', icon: LayoutDashboard },
@@ -47,7 +53,6 @@ const NAV_SECTIONS: Array<{
       { route: '/add-expense', label: 'Add Group Expense', icon: Plus },
       { route: '/expenses', label: 'Expense History', icon: Receipt },
       { route: '/balances', label: 'Group Balances', icon: Scale },
-      { route: '/trip-ledger', label: 'Trip Ledger', icon: Users },
       { route: '/settlements', label: 'Settlements & QR', icon: Wallet },
       { route: '/analytics', label: 'Group Analytics', icon: BarChart3 },
     ],

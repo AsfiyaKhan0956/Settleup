@@ -203,7 +203,7 @@ export default function App() {
     };
   }, [loadInvitePreview, navigate, refreshUnread]);
 
-  const handleAuthSuccess = (authedUser: AuthUser) => {
+  const handleAuthSuccess = async (authedUser: AuthUser) => {
     setUser(authedUser);
     refreshUnread();
     if (!authedUser.preferences.onboardingCompleted && !authedUser.isDemo) {
@@ -211,8 +211,18 @@ export default function App() {
     }
     const pendingToken = readPendingInviteToken();
     if (pendingToken) {
-      loadInvitePreview(pendingToken);
-      navigate('/groups');
+      try {
+        const conversion = await apiRequest<{ ok: true; groupId: number; alreadyMember: boolean }>(
+          '/api/groups/guest-session/convert', { method: 'POST', body: JSON.stringify({}) }
+        );
+        savePendingInviteToken(null);
+        navigate('/groups', { groupId: conversion.groupId });
+        showToast(conversion.alreadyMember ? 'Your guest identity is linked to your existing group membership.' : 'Your guest identity is now linked to your account.', 'success');
+      } catch {
+        // Ordinary registered invitations still use the existing accept flow when no joined guest session exists.
+        loadInvitePreview(pendingToken);
+        navigate('/groups');
+      }
     } else {
       navigate('/dashboard');
     }
@@ -511,7 +521,7 @@ export default function App() {
         <RegisterPage onNavigate={navigate} onSuccess={handleAuthSuccess} onDemoLogin={handleDemoLogin} />
       )}
       {route === '/forgot-password' && <ForgotPasswordPage onNavigate={navigate} />}
-      {route === '/guest-group' && <GuestGroupView token={guestInviteToken} isAuthenticated={Boolean(user)} onJoin={(token) => { savePendingInviteToken(token); setGuestInviteToken(null); if (user) { loadInvitePreview(token); navigate('/groups'); } else { navigate('/login'); } }} onBack={() => { setGuestInviteToken(null); navigate('/'); }} />}
+      {route === '/guest-group' && <GuestGroupView token={guestInviteToken} isAuthenticated={Boolean(user)} onJoin={(token) => { savePendingInviteToken(token); setGuestInviteToken(null); loadInvitePreview(token); navigate('/groups'); }} onGuestJoined={(token) => savePendingInviteToken(token)} onAuthNavigation={(authRoute) => { if (guestInviteToken) savePendingInviteToken(guestInviteToken); navigate(authRoute === 'register' ? '/register' : '/login'); }} onBack={() => { setGuestInviteToken(null); const previous = document.referrer; if (previous) { try { const url = new URL(previous); if (url.origin === window.location.origin && url.pathname !== '/guest-group') { window.history.back(); return; } } catch { /* Use the safe in-app fallback below. */ } } navigate(user ? '/groups' : '/'); }} />}
       {route === '/help' && <HelpCentrePage onNavigate={navigate} />}
       {route === '/privacy' && <LegalPage mode="privacy" onNavigate={navigate} />}
       {route === '/terms' && <LegalPage mode="terms" onNavigate={navigate} />}

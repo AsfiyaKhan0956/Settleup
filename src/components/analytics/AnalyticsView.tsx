@@ -98,7 +98,7 @@ export const AnalyticsView: React.FC = () => {
             <p className="mt-1 text-sm text-slate-600">How would you like the transactions arranged?</p>
             {exportError && <p role="alert" className="mt-2 text-xs text-red-700">{exportError}</p>}
             <div className="mt-4 grid gap-2">
-              <button type="button" onClick={() => handleExportCsv('newest')} disabled={exporting} className="rounded-lg bg-[#065F46] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#047857]">Newest first (default)</button>
+              <button type="button" onClick={() => handleExportCsv('newest')} disabled={exporting} className="rounded-lg bg-[#065F46] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#047857]">Newest first</button>
               <button type="button" onClick={() => handleExportCsv('oldest')} disabled={exporting} className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">Oldest first</button>
               <button type="button" onClick={() => setShowExportOrder(false)} className="px-4 py-2 text-sm text-slate-500 hover:text-slate-800">Cancel</button>
             </div>

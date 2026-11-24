@@ -5,7 +5,8 @@ import { formatINR } from '../../utils/currency.ts';
 
 interface GuestGroupData {
   group: { id: number; name: string; description: string; category: string };
-  members: Array<{ id: number; full_name: string; role: string; joined_at: string }>;
+  members: Array<{ id: number; full_name: string; role: string; joined_at: string; is_guest?: number }>;
+  guestMember?: { name: string } | null;
   expenses: Array<{ id: number; title: string; description: string; notes: string; category: string; split_method: string; total_paise: number; expense_date: string; payer_name: string; creator_name: string; shares: Array<{ full_name: string; owed_paise: number }>; items: Array<{ id: number; name: string; unit_price_paise: number; quantity: number; total_paise: number; consumers: string | null }> }>;
   balances: { members: Array<{ fullName: string; paidPaise: number; owedPaise: number; netPaise: number }>; transfers: Array<{ fromName: string; toName: string; amountPaise: number }>; totalExpenditurePaise: number; confirmedSettledPaise: number };
   settlements: Array<{ id: number; amount_paise: number; status: string; created_at: string; payer_name: string; receiver_name: string }>;
@@ -14,18 +15,38 @@ interface GuestGroupData {
   readOnly: true;
 }
 
-export const GuestGroupView: React.FC<{ token: string | null; isAuthenticated?: boolean; onJoin: (token: string) => void; onBack: () => void }> = ({ token, isAuthenticated = false, onJoin, onBack }) => {
+export const GuestGroupView: React.FC<{ token: string | null; isAuthenticated?: boolean; onJoin: (token: string) => void; onGuestJoined?: (token: string) => void; onAuthNavigation?: (route: 'login' | 'register') => void; onBack: () => void }> = ({ token, isAuthenticated = false, onJoin, onGuestJoined, onAuthNavigation, onBack }) => {
   const [data, setData] = useState<GuestGroupData | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [guestName, setGuestName] = useState('');
+  const [joining, setJoining] = useState(false);
+  const [joinedName, setJoinedName] = useState('');
   useEffect(() => {
     if (!token) { setError('The invitation link is missing. Open the original group invitation again.'); setLoading(false); return; }
     apiRequest('/api/groups/invite/' + encodeURIComponent(token) + '/guest-session', { method: 'POST', body: JSON.stringify({}) })
       .then(() => apiRequest<GuestGroupData>('/api/groups/guest-session/view'))
-      .then(setData)
+      .then((groupData) => { setData(groupData); setJoinedName(groupData.guestMember?.name ?? ''); })
       .catch((err) => setError(err instanceof Error ? err.message : 'This guest invitation is no longer available.'))
       .finally(() => setLoading(false));
   }, [token]);
+
+  const joinAsGuest = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!token || joining) return;
+    setJoining(true);
+    setError('');
+    try {
+      await apiRequest('/api/groups/guest-session/join', { method: 'POST', body: JSON.stringify({ name: guestName }) });
+      const groupData = await apiRequest<GuestGroupData>('/api/groups/guest-session/view');
+      setData(groupData);
+      setJoinedName(groupData.guestMember?.name ?? guestName.trim());
+      setGuestName('');
+      if (token) onGuestJoined?.(token);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to join this group.');
+    } finally { setJoining(false); }
+  };
 
   if (loading) return <div className="mx-auto max-w-5xl p-8 text-sm text-slate-500">Opening the invited group…</div>;
   if (error || !data) return <div className="mx-auto max-w-xl p-6"><div className="rounded-2xl border border-red-200 bg-white p-6"><h1 className="text-lg font-bold text-slate-900">Guest link unavailable</h1><p className="mt-2 text-sm text-red-700">{error}</p><button type="button" onClick={onBack} className="mt-4 rounded-lg border border-slate-300 px-4 py-2 text-sm">Back</button></div></div>;
@@ -33,8 +54,9 @@ export const GuestGroupView: React.FC<{ token: string | null; isAuthenticated?: 
   return <div className="mx-auto max-w-6xl space-y-5 p-4 sm:p-6">
     <div className="rounded-2xl border border-emerald-200 bg-white p-5 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-wider text-emerald-700">Guest view · {data.group.category}</p><h1 className="mt-1 font-display text-2xl font-bold text-slate-900">{data.group.name}</h1><p className="mt-2 max-w-2xl text-sm text-slate-600">{data.group.description || 'Shared group workspace'}</p></div><span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-600"><LockKeyhole className="h-3.5 w-3.5"/> Read only</span></div>
-      <div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={() => token && onJoin(token)} className="rounded-lg bg-[#065F46] px-4 py-2.5 text-sm font-semibold text-white">{isAuthenticated ? 'Join this group' : 'Sign in / Register to join'}</button><button type="button" onClick={onBack} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700"><ArrowLeft className="h-4 w-4"/> Back</button></div>
-      <p className="mt-3 text-xs text-slate-500">You can view expenses, balances, analytics and settlement history. Adding, editing, deleting and inviting are disabled in Guest View.</p>
+      {isAuthenticated ? <div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={() => token && onJoin(token)} className="rounded-lg bg-[#065F46] px-4 py-2.5 text-sm font-semibold text-white">Join Group</button><button type="button" onClick={onBack} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700"><ArrowLeft className="h-4 w-4"/> Back</button></div> : joinedName ? <div className="mt-4 rounded-xl bg-emerald-50 p-4"><p className="text-sm font-semibold text-emerald-900">Joined as {joinedName} (Guest)</p><p className="mt-1 text-xs text-emerald-800">Guest access is read-only. Create an account or log in to participate and make changes.</p><div className="mt-3 flex flex-wrap gap-2"><button type="button" onClick={() => onAuthNavigation?.('register')} className="rounded-lg bg-[#065F46] px-4 py-2 text-sm font-semibold text-white">Sign Up</button><button type="button" onClick={() => onAuthNavigation?.('login')} className="rounded-lg border border-emerald-800 px-4 py-2 text-sm font-semibold text-emerald-900">Log In</button></div></div> : <form onSubmit={joinAsGuest} className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-end"><label className="flex-1 text-xs font-semibold text-slate-700">Your name<input required minLength={2} maxLength={80} value={guestName} onChange={(event) => setGuestName(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm" autoComplete="name" /></label><button type="submit" disabled={joining} className="rounded-lg bg-[#065F46] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60">{joining ? 'Joining…' : 'Join Group'}</button><button type="button" onClick={onBack} className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700"><ArrowLeft className="h-4 w-4"/> Back</button></form>}
+      {error && <p role="alert" className="mt-2 text-sm text-red-700">{error}</p>}
+      <p className="mt-3 text-xs text-slate-500">You can view expenses, balances, analytics and settlement history. Guests cannot create groups, edit expenses, change balances, manage members, send invitations, or record settlements.</p>
     </div>
 
     <div className="grid gap-3 sm:grid-cols-3"><div className="rounded-2xl border border-slate-200 bg-white p-4"><p className="text-xs text-slate-500">Total group expenses</p><p className="mt-1 text-xl font-bold text-slate-900">{formatINR(data.balances.totalExpenditurePaise)}</p></div><div className="rounded-2xl border border-slate-200 bg-white p-4"><p className="text-xs text-slate-500">Members</p><p className="mt-1 text-xl font-bold text-slate-900">{data.members.length}</p></div><div className="rounded-2xl border border-slate-200 bg-white p-4"><p className="text-xs text-slate-500">Expenses</p><p className="mt-1 text-xl font-bold text-slate-900">{data.analytics.expenseCount}</p></div></div>

@@ -72,6 +72,7 @@ export interface MemberNetBalance {
   upiId: string | null;
   avatarUrl: string | null;
   role?: string;
+  isGuest?: boolean;
   joinedAt?: string;
   paidPaise: number;
   owedPaise: number;
@@ -174,7 +175,7 @@ export interface GroupInvitationItem {
   expires_at: string;
   created_at: string;
   last_sent_at: string | null;
-  inviteUrl: string;
+  inviteUrl: string | null;
 }
 
 export interface PendingUserInvitation {

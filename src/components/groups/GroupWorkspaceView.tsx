@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import {
-  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   Camera,
@@ -17,12 +16,12 @@ import {
   Receipt,
   RefreshCw,
   Settings,
-  Share2,
   Shield,
   Trash2,
   UserPlus,
 } from 'lucide-react';
 import { apiRequest } from '../../services/api.ts';
+import QRCode from 'qrcode';
 import { formatINR } from '../../utils/currency.ts';
 import { UserAvatar } from '../common/BrandMark.tsx';
 import type {
@@ -82,24 +81,28 @@ export const GroupWorkspaceView: React.FC<GroupWorkspaceViewProps> = ({
   const [expenses, setExpenses] = useState<ExpenseRecord[]>([]);
   const [invitations, setInvitations] = useState<GroupInvitationItem[]>([]);
   const [inviteQr, setInviteQr] = useState<string | null>(null);
+  const [qrSourceUrl, setQrSourceUrl] = useState('');
   const [inviteUrl, setInviteUrl] = useState<string>('');
   const [smtpConfigured, setSmtpConfigured] = useState<boolean>(false);
   const [smsConfigured, setSmsConfigured] = useState<boolean>(false);
   const [activities, setActivities] = useState<ActivityRecord[]>([]);
   const [settlements, setSettlements] = useState<SettlementRecord[]>([]);
 
-  const [inviteChannel, setInviteChannel] = useState<'email' | 'phone' | 'link' | 'qr'>('email');
+  const [inviteChannel, setInviteChannel] = useState<'email' | 'whatsapp' | 'sms' | 'qr'>('email');
   const [inviteEmail, setInviteEmail] = useState('');
+  const [emailRequest, setEmailRequest] = useState<{ key: string; id: string } | null>(null);
   const [phoneCountryCode, setPhoneCountryCode] = useState('+91');
   const [invitePhone, setInvitePhone] = useState('');
   const [phoneDeliveryMode, setPhoneDeliveryMode] = useState<'whatsapp' | 'sms'>('whatsapp');
   const [inviteBusy, setInviteBusy] = useState(false);
+  const [autoLinkAttemptedForGroup, setAutoLinkAttemptedForGroup] = useState<number | null>(null);
   const [lastInviteFeedback, setLastInviteFeedback] = useState<{
     channel: string;
     deliveryMode?: string;
     inviteUrl: string;
     whatsappShareUrl: string;
     smsShareUrl?: string;
+    emailShareUrl?: string;
     deliveryStatus: string;
     deliveryError?: string | null;
     hasExistingAccount?: boolean;
@@ -131,14 +134,13 @@ export const GroupWorkspaceView: React.FC<GroupWorkspaceViewProps> = ({
         setTransfers(res.transfers);
         setExpenses(res.expenses);
         setInvitations(res.invitations);
-        setInviteQr(res.inviteQrDataUrl);
         setSmtpConfigured(Boolean(res.smtpConfigured));
         setSmsConfigured(Boolean(res.smsConfigured));
         if (res.activeInviteUrl) {
           setInviteUrl(res.activeInviteUrl);
         } else {
           const activeInv = res.invitations.find((i) => i.status === 'pending' && !i.invitee_email && !i.invitee_phone);
-          setInviteUrl(activeInv ? activeInv.inviteUrl : '');
+          setInviteUrl(activeInv?.inviteUrl ?? '');
         }
         setActivities(res.activities);
         setSettlements(res.settlements);
@@ -148,8 +150,21 @@ export const GroupWorkspaceView: React.FC<GroupWorkspaceViewProps> = ({
   };
 
   useEffect(() => {
+    setInviteUrl('');
+    setInviteQr(null);
+    setQrSourceUrl('');
     loadWorkspace();
   }, [groupId]);
+
+  useEffect(() => {
+    if (tab !== 'members' || inviteChannel !== 'qr' || !inviteUrl || qrSourceUrl === inviteUrl) return;
+    setInviteQr(null);
+    let cancelled = false;
+    QRCode.toDataURL(inviteUrl, { width: 280, margin: 2, errorCorrectionLevel: 'M' })
+      .then((dataUrl) => { if (!cancelled) { setInviteQr(dataUrl); setQrSourceUrl(inviteUrl); } })
+      .catch(() => onToast('Could not generate the QR code on this device.', 'error'));
+    return () => { cancelled = true; };
+  }, [tab, inviteChannel, inviteUrl, qrSourceUrl]);
 
   const handleGenerateShareInvite = async (channel: 'qr' | 'link', reuseExisting = false) => {
     setInviteBusy(true);
@@ -157,15 +172,20 @@ export const GroupWorkspaceView: React.FC<GroupWorkspaceViewProps> = ({
     try {
       const res = await apiRequest<{
         inviteUrl: string;
-        qrDataUrl: string;
         whatsappShareUrl: string;
         deliveryStatus: string;
       }>(`/api/groups/${groupId}/invitations`, {
         method: 'POST',
         body: JSON.stringify({ channel, reuseExisting, expiresInDays: 14 }),
       });
-      setInviteQr(res.qrDataUrl);
       setInviteUrl(res.inviteUrl);
+      setInviteQr(null);
+      setQrSourceUrl('');
+      if (channel === 'qr') {
+        const qrDataUrl = await QRCode.toDataURL(res.inviteUrl, { width: 280, margin: 2, errorCorrectionLevel: 'M' });
+        setInviteQr(qrDataUrl);
+        setQrSourceUrl(res.inviteUrl);
+      }
       if (!reuseExisting) {
         setLastInviteFeedback({
           channel,
@@ -187,45 +207,41 @@ export const GroupWorkspaceView: React.FC<GroupWorkspaceViewProps> = ({
   };
 
   useEffect(() => {
-    if (tab === 'members' && (inviteChannel === 'link' || inviteChannel === 'qr') && !inviteUrl && !inviteBusy && group) {
-      handleGenerateShareInvite(inviteChannel, true);
+    if (tab === 'members' && !loading && group?.id === groupId && !inviteUrl && !inviteBusy && autoLinkAttemptedForGroup !== groupId) {
+      setAutoLinkAttemptedForGroup(groupId);
+      handleGenerateShareInvite('link', true);
     }
-  }, [tab, inviteChannel, inviteUrl, group]);
+  }, [tab, group?.id, groupId, loading, inviteUrl, inviteBusy, autoLinkAttemptedForGroup]);
 
   const handleEmailInvite = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inviteEmail.trim()) return;
+    const recipients = inviteEmail.split(/[\s,;]+/).map((email) => email.trim()).filter(Boolean);
+    if (!recipients.length) return;
+    if (recipients.length > 5) { onToast('Send invitations to no more than 5 addresses at a time.', 'error'); return; }
+    const requestKey = recipients.map((email) => email.toLowerCase()).join(',');
+    const requestId = emailRequest?.key === requestKey ? emailRequest.id : crypto.randomUUID().replaceAll('-', '');
+    if (emailRequest?.key !== requestKey) setEmailRequest({ key: requestKey, id: requestId });
     setInviteBusy(true);
     setLastInviteFeedback(null);
     try {
       const res = await apiRequest<{
-        inviteUrl: string;
-        whatsappShareUrl: string;
-        emailDelivered: boolean;
-        deliveryStatus: string;
-        deliveryError: string | null;
-        smtpConfigured: boolean;
-      }>(`/api/groups/${groupId}/invitations`, {
+        ok: boolean;
+        sentCount: number;
+        failedIndexes: number[];
+        results: Array<{ index: number; ok: boolean; error?: string }>;
+      }>(`/api/groups/${groupId}/invitations/email`, {
         method: 'POST',
-        body: JSON.stringify({ channel: 'email', inviteeEmail: inviteEmail.trim(), expiresInDays: 14 }),
+        body: JSON.stringify({ recipients, requestId }),
       });
-      setInviteEmail('');
-      setLastInviteFeedback({
-        channel: 'email',
-        inviteUrl: res.inviteUrl,
-        whatsappShareUrl: res.whatsappShareUrl,
-        deliveryStatus: res.deliveryStatus,
-        deliveryError: res.deliveryError,
-      });
-      if (res.emailDelivered) {
-        onToast('Invitation email sent.', 'success');
-      } else {
-        onToast(
-          res.deliveryError || 'Email invitation saved, but SMTP is not configured to send emails directly. Share the link below.',
-          'error'
-        );
-      }
       loadWorkspace();
+      if (res.ok) {
+        setInviteEmail('');
+        setEmailRequest(null);
+        onToast(`Invitation email sent to ${res.sentCount} recipient${res.sentCount === 1 ? '' : 's'}.`, 'success');
+      } else {
+        const failed = (res.failedIndexes ?? []).map((index) => recipients[index]).filter(Boolean);
+        onToast(`Email sent to ${res.sentCount}; failed for ${failed.join(', ') || 'one or more recipients'}. Check the addresses and delivery status before retrying.`, 'error');
+      }
     } catch (err) {
       onToast(err instanceof Error ? err.message : 'Could not create email invitation', 'error');
     } finally {
@@ -260,27 +276,25 @@ export const GroupWorkspaceView: React.FC<GroupWorkspaceViewProps> = ({
         }),
       });
       setInvitePhone('');
+      const smsDelivered = phoneDeliveryMode === 'sms' && Boolean(res.smsSent);
       setLastInviteFeedback({
         channel: 'phone',
         deliveryMode: res.deliveryMode,
         inviteUrl: res.inviteUrl,
         whatsappShareUrl: res.whatsappShareUrl,
         smsShareUrl: res.smsShareUrl,
-        deliveryStatus: res.deliveryStatus,
-        deliveryError: res.deliveryError,
+        deliveryStatus: smsDelivered ? 'sent' : 'manual_share',
+        deliveryError: smsDelivered ? res.deliveryError : null,
         hasExistingAccount: res.hasExistingAccount,
       });
-      if (res.smsSent) {
-        onToast('SMS invitation sent.', 'success');
-      } else if (res.deliveryMode === 'sms') {
-        onToast(
-          res.deliveryError || 'Automated SMS is unavailable. Open your SMS app, WhatsApp, or Copy Link below.',
-          'error'
-        );
-      } else {
-        onToast('WhatsApp invitation link ready — click Send via WhatsApp below.', 'success');
-      }
       loadWorkspace();
+      if (smsDelivered) {
+        onToast('SMS invitation sent successfully.', 'success');
+      } else {
+        onToast(phoneDeliveryMode === 'sms' ? 'Opening your SMS app with the invitation ready.' : 'Opening WhatsApp with the invitation ready.', 'success');
+        const appUrl = phoneDeliveryMode === 'sms' ? res.smsShareUrl : res.whatsappShareUrl;
+        if (appUrl) window.location.href = appUrl;
+      }
     } catch (err) {
       onToast(err instanceof Error ? err.message : 'Could not create phone invitation', 'error');
     } finally {
@@ -290,15 +304,43 @@ export const GroupWorkspaceView: React.FC<GroupWorkspaceViewProps> = ({
 
   const handleResendInvite = async (inviteId: number) => {
     try {
+      const invitation = invitations.find((item) => item.id === inviteId);
+      if (invitation?.channel === 'email' && invitation.invitee_email) {
+        const delivery = await apiRequest<{ ok: boolean; sentCount: number }>(`/api/groups/${groupId}/invitations/email`, {
+          method: 'POST',
+          body: JSON.stringify({ recipients: [invitation.invitee_email], requestId: crypto.randomUUID().replaceAll('-', '') }),
+        });
+        onToast(delivery.ok ? 'Invitation email sent successfully.' : 'Email delivery failed or could not be confirmed. Check delivery status before retrying.', delivery.ok ? 'success' : 'error');
+        loadWorkspace();
+        return;
+      }
       const res = await apiRequest<{
+        ok?: boolean;
+        sentCount?: number;
+        failedIndexes?: number[];
         emailDelivered?: boolean;
         smsDelivered?: boolean;
         deliveryError: string | null;
+        emailShareUrl?: string;
+        whatsappShareUrl?: string;
+        smsShareUrl?: string;
+        inviteUrl?: string;
       }>(`/api/groups/${groupId}/invitations/${inviteId}/resend`, { method: 'POST' });
-      if (res.emailDelivered || res.smsDelivered) {
-        onToast('Invitation resent.', 'success');
+      if (invitation?.channel === 'email') {
+        if (res.ok) onToast(`Invitation email sent to ${res.sentCount ?? 1} recipient${res.sentCount === 1 ? '' : 's'}.`, 'success');
+        else if (res.ok === false) onToast('Email delivery failed or could not be confirmed. Check delivery status before retrying.', 'error');
+        else if (res.emailDelivered) onToast('Invitation email sent successfully.', 'success');
+        else {
+          const message = `Hello,\n\n${currentUser.fullName} has invited you to join the "${group?.name ?? 'group'}" group on SettleUp.\n\nOpen this secure invitation link to view the group and accept:\n${res.inviteUrl}\n\nRegards,\n${currentUser.fullName}`;
+          const emailUrl = res.emailShareUrl || `mailto:${invitation.invitee_email ?? ''}?subject=${encodeURIComponent(`Invitation to join ${group?.name ?? 'SettleUp'} on SettleUp`)}&body=${encodeURIComponent(message)}`;
+          onToast('Opening your email app with the invitation ready.', 'success');
+          window.location.href = emailUrl;
+        }
+      } else if (invitation?.channel === 'phone' && res.smsDelivered) {
+        onToast('SMS invitation sent successfully.', 'success');
       } else {
-        onToast(res.deliveryError || 'Direct delivery is not configured. Copy the invite link manually.', 'error');
+        onToast('Opening WhatsApp with the invitation ready.', 'success');
+        if (res.whatsappShareUrl) window.location.href = res.whatsappShareUrl;
       }
       loadWorkspace();
     } catch (err) {
@@ -587,12 +629,12 @@ export const GroupWorkspaceView: React.FC<GroupWorkspaceViewProps> = ({
                         {m.fullName} {m.userId === currentUser.id ? '(You)' : ''}
                       </p>
                       <p className="text-xs text-slate-500 truncate">
-                        {m.email} · {m.role === 'admin' ? 'Admin' : 'Member'}
+                        {m.isGuest || m.role === 'guest' ? 'Guest · Read only' : `${m.email} · ${m.role === 'admin' ? 'Admin' : 'Member'}`}
                       </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    {group.myRole === 'admin' && m.userId !== currentUser.id && (
+                    {group.myRole === 'admin' && m.userId !== currentUser.id && m.role !== 'guest' && !m.isGuest && (
                       <>
                         <button
                           type="button"
@@ -632,12 +674,12 @@ export const GroupWorkspaceView: React.FC<GroupWorkspaceViewProps> = ({
               </p>
             </div>
 
-            {/* 4 Clear Add Member Methods: 1. Email, 2. Phone Number, 3. Invite Link, 4. QR Code */}
+            {/* Four invitation methods: Email, WhatsApp, SMS, and QR Code */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 p-1 bg-slate-100 rounded-xl text-xs font-semibold">
               {[
                 { id: 'email', label: 'Email', icon: Mail },
-                { id: 'phone', label: 'Phone', icon: Phone },
-                { id: 'link', label: 'Invite Link', icon: Link2 },
+                { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle },
+                { id: 'sms', label: 'SMS', icon: Phone },
                 { id: 'qr', label: 'QR Code', icon: QrCode },
               ].map((opt) => {
                 const Icon = opt.icon;
@@ -646,7 +688,7 @@ export const GroupWorkspaceView: React.FC<GroupWorkspaceViewProps> = ({
                   <button
                     key={opt.id}
                     type="button"
-                    onClick={() => setInviteChannel(opt.id as typeof inviteChannel)}
+                    onClick={() => { setInviteChannel(opt.id as typeof inviteChannel); if (opt.id === 'whatsapp' || opt.id === 'sms') setPhoneDeliveryMode(opt.id); }}
                     className={`py-2 px-2 rounded-lg inline-flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
                       active ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
                     }`}
@@ -661,25 +703,20 @@ export const GroupWorkspaceView: React.FC<GroupWorkspaceViewProps> = ({
             {/* Method 1: Email Invitation */}
             {inviteChannel === 'email' && (
               <div className="space-y-3">
-                {!smtpConfigured && (
-                  <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2">
-                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                    <span>
-                      Direct email sending (SMTP) is not configured on this server. Submitting creates a secure single-use invitation, notifies existing users in-app, and gives you a link to copy or share on WhatsApp.
-                    </span>
-                  </div>
-                )}
+                <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-600">
+                  Send a secure invitation through the configured SettleUp email service. Messages are sent individually; Gmail sending limits apply.
+                </p>
                 <form onSubmit={handleEmailInvite} className="space-y-2.5">
                   <label htmlFor="invite-email-input" className="block text-xs font-medium text-slate-700">
-                    Email Address
+                    Recipient Email Addresses (up to 5)
                   </label>
                   <div className="flex flex-col sm:flex-row gap-2">
-                    <input
+                    <textarea
                       id="invite-email-input"
-                      type="email"
+                      rows={3}
                       value={inviteEmail}
                       onChange={(e) => setInviteEmail(e.target.value)}
-                      placeholder="Enter email address"
+                      placeholder="Enter one or more addresses, separated by commas or spaces"
                       className="flex-1 px-3.5 py-2 text-sm border border-slate-300 rounded-lg focus:border-[#065F46] focus:outline-none"
                       required
                     />
@@ -689,20 +726,20 @@ export const GroupWorkspaceView: React.FC<GroupWorkspaceViewProps> = ({
                       className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-semibold text-white bg-[#065F46] hover:bg-[#047857] rounded-lg cursor-pointer whitespace-nowrap disabled:opacity-60"
                     >
                       {inviteBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
-                      <span>Send Invite</span>
+                      <span>Send Invitation</span>
                     </button>
                   </div>
                 </form>
               </div>
             )}
 
-            {/* Method 2: Phone Number (WhatsApp or SMS) */}
-            {inviteChannel === 'phone' && (
+            {/* WhatsApp or SMS invitation */}
+            {(inviteChannel === 'whatsapp' || inviteChannel === 'sms') && (
               <div className="space-y-3">
                 <form onSubmit={handlePhoneInvite} className="space-y-3">
                   <div>
                     <label htmlFor="invite-phone-input" className="block text-xs font-medium text-slate-700 mb-1">
-                      Mobile Number (with Country Code)
+                      {inviteChannel === 'whatsapp' ? 'WhatsApp Number (with Country Code)' : 'Mobile Number (with Country Code)'}
                     </label>
                     <div className="flex gap-2">
                       <select
@@ -733,38 +770,7 @@ export const GroupWorkspaceView: React.FC<GroupWorkspaceViewProps> = ({
                     </p>
                   </div>
 
-                  <div className="space-y-1.5">
-                    <span className="block text-xs font-medium text-slate-700">Send Option</span>
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setPhoneDeliveryMode('whatsapp')}
-                        className={`py-2 px-3 rounded-lg border text-xs font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer ${
-                          phoneDeliveryMode === 'whatsapp'
-                            ? 'border-[#065F46] bg-emerald-50 text-[#065F46]'
-                            : 'border-slate-200 bg-white text-slate-600'
-                        }`}
-                      >
-                        <MessageCircle className="w-3.5 h-3.5" /> WhatsApp
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setPhoneDeliveryMode('sms')}
-                        className={`py-2 px-3 rounded-lg border text-xs font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer ${
-                          phoneDeliveryMode === 'sms'
-                            ? 'border-[#065F46] bg-emerald-50 text-[#065F46]'
-                            : 'border-slate-200 bg-white text-slate-600'
-                        }`}
-                      >
-                        <Phone className="w-3.5 h-3.5" /> SMS
-                      </button>
-                    </div>
-                    {phoneDeliveryMode === 'sms' && !smsConfigured && (
-                      <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2">
-                        Automated server SMS is not configured. Creating this invite provides an instant &quot;Open SMS App&quot; button, WhatsApp share link, and Copy Link fallback.
-                      </p>
-                    )}
-                  </div>
+
 
                   <button
                     type="submit"
@@ -772,107 +778,9 @@ export const GroupWorkspaceView: React.FC<GroupWorkspaceViewProps> = ({
                     className="w-full py-2.5 px-4 text-sm font-semibold text-white bg-[#065F46] hover:bg-[#047857] rounded-lg inline-flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
                   >
                     {inviteBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
-                    <span>Create {phoneDeliveryMode === 'whatsapp' ? 'WhatsApp' : 'SMS'} Invitation</span>
+                    <span>{phoneDeliveryMode === 'whatsapp' ? 'Continue to WhatsApp' : 'Open SMS App'}</span>
                   </button>
                 </form>
-              </div>
-            )}
-
-            {/* Method 3: Shareable Invite Link */}
-            {inviteChannel === 'link' && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-slate-700">Shareable Group Invite Link</span>
-                  <button
-                    type="button"
-                    disabled={inviteBusy}
-                    onClick={() => handleGenerateShareInvite('link', false)}
-                    className="text-xs font-semibold text-[#065F46] hover:underline cursor-pointer"
-                  >
-                    Generate New Link
-                  </button>
-                </div>
-
-                {inviteUrl ? (
-                  <div className="p-4 border border-slate-200 rounded-xl bg-[#F8FAFC] space-y-3">
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        readOnly
-                        value={inviteUrl}
-                        aria-label="Shareable invitation link"
-                        className="flex-1 px-3 py-2 text-xs font-mono-num bg-white border border-slate-300 rounded-lg"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          navigator.clipboard.writeText(inviteUrl);
-                          onToast('Invitation link copied to clipboard.', 'success');
-                        }}
-                        className="px-3.5 py-2 text-xs font-semibold bg-slate-900 text-white rounded-lg inline-flex items-center gap-1.5 cursor-pointer shrink-0"
-                      >
-                        <Copy className="w-3.5 h-3.5" /> Copy Link
-                      </button>
-                    </div>
-
-                    <div className="flex flex-wrap gap-2">
-                      <a
-                        href={`https://wa.me/?text=${encodeURIComponent(
-                          `Hey! I've invited you to join my group "${group.name}" on SettleUp. Open this link to view and accept:\n${inviteUrl}`
-                        )}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-[#065F46] hover:bg-[#047857] rounded-lg"
-                      >
-                        <MessageCircle className="w-3.5 h-3.5" /> Share on WhatsApp
-                      </a>
-
-                      {typeof navigator !== 'undefined' && typeof navigator.share === 'function' ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            navigator
-                              .share({
-                                title: `Join ${group.name} on SettleUp`,
-                                text: `${currentUser.fullName} invited you to join "${group.name}" on SettleUp:`,
-                                url: inviteUrl,
-                              })
-                              .catch(() => {});
-                          }}
-                          className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-800 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg cursor-pointer"
-                        >
-                          <Share2 className="w-3.5 h-3.5 text-[#065F46]" /> Share
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            navigator.clipboard.writeText(
-                              `${currentUser.fullName} invited you to join "${group.name}" on SettleUp: ${inviteUrl}`
-                            );
-                            onToast('Invitation message copied — paste it into Instagram, Facebook, or any chat app.', 'success');
-                          }}
-                          className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-800 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg cursor-pointer"
-                        >
-                          <Share2 className="w-3.5 h-3.5 text-[#065F46]" /> Share (Copy Message)
-                        </button>
-                      )}
-                    </div>
-                    <p className="text-[11px] text-slate-500">
-                      Share via WhatsApp, Instagram, Facebook, or any messaging app. Anyone opening the link must confirm before joining.
-                    </p>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={inviteBusy}
-                    onClick={() => handleGenerateShareInvite('link', false)}
-                    className="w-full py-6 border border-dashed border-slate-300 rounded-xl text-sm font-medium text-slate-700 hover:bg-slate-50 flex flex-col items-center gap-2 cursor-pointer"
-                  >
-                    <Link2 className="w-5 h-5 text-[#065F46]" />
-                    <span>Generate Shareable Invite Link</span>
-                  </button>
-                )}
               </div>
             )}
 
@@ -946,6 +854,23 @@ export const GroupWorkspaceView: React.FC<GroupWorkspaceViewProps> = ({
               </div>
             )}
 
+            {/* Shareable Group Invitation - always available below the four invitation methods */}
+            <div className="space-y-3 border-t border-slate-200 pt-5">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">Shareable Group Invitation</h3>
+                <p className="mt-1 text-xs text-slate-500">Create a secure invitation link that you can copy and send wherever you like.</p>
+              </div>
+              {inviteUrl ? (
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <input type="text" readOnly value={inviteUrl} aria-label="Shareable group invitation link" className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-xs font-mono-num" />
+                  <button type="button" onClick={() => { navigator.clipboard.writeText(inviteUrl); onToast('Invitation link copied to clipboard.', 'success'); }} className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white"><Copy className="h-3.5 w-3.5"/> Copy Link</button>
+                  <button type="button" disabled={inviteBusy} onClick={() => handleGenerateShareInvite('link', false)} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-50">Generate New Link</button>
+                </div>
+              ) : (
+                <button type="button" disabled={inviteBusy} onClick={() => handleGenerateShareInvite('link', false)} className="w-full rounded-xl border border-dashed border-slate-300 py-4 text-sm font-semibold text-[#065F46] disabled:opacity-50">{inviteBusy ? 'Creating secure link…' : 'Generate Invitation Link'}</button>
+              )}
+            </div>
+
             {/* Honest Feedback Card after creating invite */}
             {lastInviteFeedback && (
               <div className="p-3.5 rounded-xl bg-[#F8FAFC] border border-slate-200 space-y-2.5 text-xs">
@@ -963,11 +888,9 @@ export const GroupWorkspaceView: React.FC<GroupWorkspaceViewProps> = ({
                     }`}
                   >
                     {lastInviteFeedback.deliveryStatus === 'sent'
-                      ? lastInviteFeedback.channel === 'phone'
-                        ? 'SMS Sent'
-                        : 'Email Sent'
-                      : lastInviteFeedback.deliveryStatus === 'not_configured'
-                      ? 'Manual Share Required'
+                      ? 'Delivered'
+                      : lastInviteFeedback.deliveryStatus === 'manual_share' || lastInviteFeedback.deliveryStatus === 'not_configured'
+                      ? (lastInviteFeedback.channel === 'email' || lastInviteFeedback.channel === 'phone' ? 'Ready to send from your app' : 'Invitation ready')
                       : lastInviteFeedback.deliveryStatus === 'failed'
                       ? 'Delivery Failed — Share Manually'
                       : 'Ready to Share'}
@@ -987,15 +910,20 @@ export const GroupWorkspaceView: React.FC<GroupWorkspaceViewProps> = ({
                   >
                     <Copy className="w-3 h-3" /> Copy Link
                   </button>
-                  <a
+                  {lastInviteFeedback.emailShareUrl && lastInviteFeedback.deliveryStatus !== 'sent' && (
+                    <a href={lastInviteFeedback.emailShareUrl} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-slate-300 bg-white font-semibold text-slate-800">
+                      <Mail className="h-3 w-3" /> Open Email App
+                    </a>
+                  )}
+                  {!(lastInviteFeedback.channel === 'phone' && lastInviteFeedback.deliveryMode === 'sms' && lastInviteFeedback.deliveryStatus === 'sent') && <a
                     href={lastInviteFeedback.whatsappShareUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-[#065F46] text-white rounded font-semibold"
                   >
                     <MessageCircle className="w-3 h-3" /> Send via WhatsApp
-                  </a>
-                  {lastInviteFeedback.smsShareUrl && (
+                  </a>}
+                  {lastInviteFeedback.smsShareUrl && lastInviteFeedback.deliveryStatus !== 'sent' && (
                     <a
                       href={lastInviteFeedback.smsShareUrl}
                       className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-white border border-slate-300 text-slate-800 rounded font-semibold hover:bg-slate-50"
@@ -1003,23 +931,7 @@ export const GroupWorkspaceView: React.FC<GroupWorkspaceViewProps> = ({
                       <Phone className="w-3 h-3 text-[#065F46]" /> Open SMS App
                     </a>
                   )}
-                  {typeof navigator !== 'undefined' && typeof navigator.share === 'function' && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator
-                          .share({
-                            title: `Join ${group.name} on SettleUp`,
-                            text: `${currentUser.fullName} invited you to join "${group.name}" on SettleUp:`,
-                            url: lastInviteFeedback.inviteUrl,
-                          })
-                          .catch(() => {});
-                      }}
-                      className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-white border border-slate-300 text-slate-800 rounded font-medium cursor-pointer"
-                    >
-                      <Share2 className="w-3 h-3" /> Share
-                    </button>
-                  )}
+
                 </div>
               </div>
             )}
@@ -1053,15 +965,15 @@ export const GroupWorkspaceView: React.FC<GroupWorkspaceViewProps> = ({
                           </div>
                           <p className="text-[11px] text-slate-500 mt-0.5">
                             Method: <span className="capitalize">{inv.channel}</span> · Uses {inv.use_count}/{inv.max_uses}
-                            {(inv.channel === 'email' || inv.channel === 'phone') && ` · Delivery: ${inv.delivery_status}`}
+                            {(inv.channel === 'email' || inv.channel === 'phone' || inv.channel === 'whatsapp') && ` · Delivery: ${inv.delivery_status}`}
                           </p>
                         </div>
                         <div className="flex items-center gap-2.5 shrink-0">
-                          {inv.status === 'pending' && (
+                          {inv.status === 'pending' && inv.inviteUrl && (
                             <button
                               type="button"
                               onClick={() => {
-                                navigator.clipboard.writeText(inv.inviteUrl);
+                                navigator.clipboard.writeText(inv.inviteUrl!);
                                 onToast('Invitation link copied.', 'success');
                               }}
                               className="text-slate-700 hover:underline cursor-pointer"
